@@ -31,10 +31,6 @@ COPY .env.example ./.env.example
 # Create directories needed at runtime
 RUN mkdir -p backend/logs backend/data backend/models
 
-# Non-root user for security
-RUN useradd -m -u 1001 tradia && chown -R tradia:tradia /app
-USER tradia
-
 EXPOSE 8000
 
 ENV PYTHONUNBUFFERED=1 \
