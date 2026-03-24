@@ -50,8 +50,7 @@ services:
     expose:
       - "3000"
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
     networks:
       - tradia_net
 
