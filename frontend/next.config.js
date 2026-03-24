@@ -2,6 +2,9 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
 const nextConfig = {
+  // Required for Docker standalone image
+  output: 'standalone',
+
   // Expose the backend URL to the browser bundle
   env: {
     NEXT_PUBLIC_API_URL: API_URL,
