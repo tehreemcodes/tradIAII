@@ -26,6 +26,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
+import asyncio
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -74,6 +75,14 @@ app.include_router(exchange_router)
 # Used by GET /api/backtest/status so the frontend can show a spinner.
 _backtest_lock    = threading.Lock()
 _backtest_running = False
+
+# ── Background Trader ─────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting background trader task...")
+    from backend.services.bg_trader import start_bg_trader
+    asyncio.create_task(start_bg_trader())
 
 
 # ── Pydantic Models ───────────────────────────────────────────────────────────
