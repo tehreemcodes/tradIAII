@@ -92,7 +92,7 @@ function ICTChecklist({ signal }: { signal: Signal }) {
     { label: 'Swing Detected',           pass: pat?.swing_price != null },
     { label: 'FVG Present',              pass: pat?.fvg_top != null },
     { label: 'Signal Generated',         pass: isBuy || isSell },
-    { label: 'Confidence >= 60%',        pass: signal.confidence >= 0.60 },
+    { label: 'Confidence >= 20%',        pass: signal.confidence >= 0.20 },
     { label: 'SL at Structure',          pass: signal.sl != null },
   ]
 
