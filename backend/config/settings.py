@@ -106,7 +106,7 @@ LABEL_LOSS     = 0
 MODEL_PATH    = MODEL_DIR / "ict_model.pkl"
 FEATURES_PATH = MODEL_DIR / "features.pkl"
 SCALER_PATH   = MODEL_DIR / "scaler.pkl"
-MIN_CONFIDENCE = 0.60
+MIN_CONFIDENCE = 0.48
 
 # ── XGBoost Hyperparameters ───────────────────────────────────
 # FIX: Renamed from LGBM_PARAMS. Now uses XGBoost-compatible keys.
