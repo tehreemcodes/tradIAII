@@ -316,7 +316,7 @@ def get_candles(
         # ── Annotate Historical Signals with ML Executable Status ────────────
         try:
             import joblib
-            from backend.services.feature_builder import build_ml_features
+            from backend.services.feature_builder import build_features
             from backend.config.settings import MODEL_PATH, FEATURES_PATH, SCALER_PATH, MIN_CONFIDENCE
             
             if MODEL_PATH.exists() and FEATURES_PATH.exists() and SCALER_PATH.exists():
@@ -325,10 +325,10 @@ def get_candles(
                 scaler = joblib.load(SCALER_PATH)
                 
                 # We need to build ML features to predict
-                X_df = build_ml_features(df.copy())
+                X_df = build_features(df.copy())
                 
                 df["executable"] = False
-                df["reject_reason"] = "No signal"
+                df["reject_reason"] = "ML Evaluation Skipped"
                 df["ml_confidence"] = 0.0
                 
                 for ts, row in X_df.iterrows():
@@ -387,7 +387,7 @@ def get_candles(
                               else None,
                 "signal":     int(row.get("signal", 1)),
                 "executable": bool(row.get("executable", False)) if "executable" in row else False,
-                "reject_reason": str(row.get("reject_reason", "No signal")) if "reject_reason" in row else "No signal",
+                "reject_reason": str(row.get("reject_reason", "ML Evaluator Error")) if "reject_reason" in row else "ML Evaluator Error",
                 "ml_confidence": float(row.get("ml_confidence", 0.0)) if "ml_confidence" in row else 0.0,
                 "signal_sl":  float(row["signal_sl"])
                               if not pd.isna(row.get("signal_sl", float("nan")))
