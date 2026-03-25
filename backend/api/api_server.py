@@ -313,6 +313,57 @@ def get_candles(
         df = run_ict_pipeline(df)
         df = run_state_machine(df)
 
+        # ── Annotate Historical Signals with ML Executable Status ────────────
+        try:
+            import joblib
+            from backend.services.feature_builder import build_ml_features
+            from backend.config.settings import MODEL_PATH, FEATURES_PATH, SCALER_PATH, MIN_CONFIDENCE
+            
+            if MODEL_PATH.exists() and FEATURES_PATH.exists() and SCALER_PATH.exists():
+                model = joblib.load(MODEL_PATH)
+                features = joblib.load(FEATURES_PATH)
+                scaler = joblib.load(SCALER_PATH)
+                
+                # We need to build ML features to predict
+                X_df = build_ml_features(df.copy())
+                
+                df["executable"] = False
+                df["reject_reason"] = "No signal"
+                df["ml_confidence"] = 0.0
+                
+                for ts, row in X_df.iterrows():
+                    sig = int(row.get("signal", 1))
+                    if sig != 1 and ts in df.index:
+                        X_row = X_df.loc[[ts], features]
+                        if not X_row.isna().any().any():
+                            X_scaled = scaler.transform(X_row)
+                            probs = model.predict_proba(X_scaled)[0]
+                            # XGBoost: 1 represents class 1 (BUY, sig 2), 0 represents 0 (SELL, sig 0)
+                            win_prob = probs[1] if sig == 2 else probs[0]
+                            
+                            df.at[ts, "ml_confidence"] = round(float(win_prob), 4)
+                            
+                            # Calculate dynamic threshold
+                            full_conf = bool(row.get("full_bull_confluence", 0) or row.get("full_bear_confluence", 0))
+                            h4_bias = int(row.get("h4_bias", 0))
+                            sig_dir = 1 if sig == 2 else -1
+                            
+                            if full_conf:
+                                dyn_thresh = MIN_CONFIDENCE - 0.05
+                            elif h4_bias == sig_dir:
+                                dyn_thresh = MIN_CONFIDENCE
+                            else:
+                                dyn_thresh = MIN_CONFIDENCE + 0.10
+                                
+                            if win_prob >= dyn_thresh:
+                                df.at[ts, "executable"] = True
+                                df.at[ts, "reject_reason"] = "Executable"
+                            else:
+                                df.at[ts, "reject_reason"] = f"ML Confidence {win_prob:.2f} < {dyn_thresh:.2f}"
+                                
+        except Exception as e:
+            logger.warning(f"Could not calculate historical ML thresholds: {e}")
+
         candles = []
         for ts, row in df.iterrows():
             candles.append({
@@ -335,6 +386,9 @@ def get_candles(
                                  and not pd.isna(row.get("fvg_bot", float("nan")))
                               else None,
                 "signal":     int(row.get("signal", 1)),
+                "executable": bool(row.get("executable", False)) if "executable" in row else False,
+                "reject_reason": str(row.get("reject_reason", "No signal")) if "reject_reason" in row else "No signal",
+                "ml_confidence": float(row.get("ml_confidence", 0.0)) if "ml_confidence" in row else 0.0,
                 "signal_sl":  float(row["signal_sl"])
                               if not pd.isna(row.get("signal_sl", float("nan")))
                               else None,

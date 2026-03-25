@@ -146,14 +146,23 @@ export default function Chart({ activeSignal, activeTf, onTfChange }: ChartProps
       // ── Signal Markers ──────────────────────────────────────
       const markers = candles
         .filter(c => c.signal === 2 || c.signal === 0)
-        .map(c => ({
-          time:     c.time as any,
-          position: c.signal === 2 ? 'belowBar' : 'aboveBar',
-          color:    c.signal === 2 ? '#2dd4bf' : '#f43f5e',
-          shape:    c.signal === 2 ? 'arrowUp'  : 'arrowDown',
-          text:     c.signal === 2 ? 'BUY'      : 'SELL',
-          size:     1,
-        }))
+        .map(c => {
+          const isExec = c.executable
+          const isBuy = c.signal === 2
+          
+          return {
+            time:     c.time as any,
+            position: isBuy ? 'belowBar' : 'aboveBar',
+            color:    isExec 
+                        ? (isBuy ? '#2dd4bf' : '#f43f5e') 
+                        : 'rgba(255, 255, 255, 0.3)',
+            shape:    isBuy ? 'arrowUp' : 'arrowDown',
+            text:     isExec 
+                        ? `${isBuy ? 'BUY' : 'SELL'} ${Math.round(c.ml_confidence * 100)}%`
+                        : `✖ ${c.reject_reason}`,
+            size:     isExec ? 1 : 0.5,
+          }
+        })
 
       if (markers.length > 0) {
         candleSeries.setMarkers(markers as any)

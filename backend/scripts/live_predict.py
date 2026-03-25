@@ -338,17 +338,42 @@ def get_live_signal(
 
     logger.info(f"Model confidence: {win_prob:.4f}  (threshold: {MIN_CONFIDENCE})")
 
-    # ── Step 7: Signal decision ───────────────────────────────────────────────
+    # ── Step 7: Signal decision & Dynamic Thresholding ───────────────────────
     sig_map = {2: "BUY", 0: "SELL", 1: "NO TRADE"}
     signal  = sig_map.get(raw_signal, "NO TRADE")
+    
+    executable = False
+    reject_reason = None
+    dynamic_threshold = MIN_CONFIDENCE
 
-    # Apply confidence filter — only trade when model is confident enough
-    if signal != "NO TRADE" and win_prob < MIN_CONFIDENCE:
-        logger.info(
-            f"Signal {signal} filtered out — confidence {win_prob:.4f} "
-            f"< threshold {MIN_CONFIDENCE}"
-        )
-        signal = "NO TRADE"
+    if signal != "NO TRADE":
+        htf_info = {
+            "h4": int(last.get("h4_bias", 0)),
+            "d1": int(last.get("d1_bias", 0)),
+            "full_confluence": bool(
+                last.get("full_bull_confluence", 0) or
+                last.get("full_bear_confluence", 0)
+            ),
+        }
+        
+        signal_dir_num = 1 if signal == "BUY" else -1
+        
+        # Calculate dynamic threshold based on HTF structure tailwind
+        if htf_info["full_confluence"]:
+            dynamic_threshold = MIN_CONFIDENCE - 0.05
+        elif htf_info["h4"] == signal_dir_num:
+            dynamic_threshold = MIN_CONFIDENCE
+        else:
+            dynamic_threshold = MIN_CONFIDENCE + 0.10
+            
+        dynamic_threshold = round(dynamic_threshold, 2)
+        
+        # Apply intelligent confidence filter
+        if win_prob >= dynamic_threshold:
+            executable = True
+        else:
+            reject_reason = f"ML Confidence {win_prob:.2f} < {dynamic_threshold:.2f} (Required)"
+            logger.info(f"Signal {signal} not executable — {reject_reason}")
 
     # ── Step 8: Position sizing ───────────────────────────────────────────────
     entry         = float(last["close"])
@@ -373,15 +398,18 @@ def get_live_signal(
             position_size = trade.position_size
         else:
             # RiskManager rejected the trade (SL too close, bad direction, etc.)
+            reject_reason = "Risk rejected (SL too tight or invalid)"
             logger.warning(
                 f"RiskManager rejected position: entry={entry}, sl={sl}, "
                 f"direction={signal}"
             )
-            signal = "NO TRADE"
+            executable = False
 
     # ── Step 9: Build response ────────────────────────────────────────────────
     return {
         "signal":        signal,
+        "executable":    executable,
+        "reject_reason": reject_reason,
         "confidence":    round(win_prob, 4),
         "entry":         round(entry, 2),
         "sl":            round(sl, 2) if sl is not None else None,

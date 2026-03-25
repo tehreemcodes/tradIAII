@@ -53,6 +53,9 @@ export interface Candle {
   fvg_top:     number | null
   fvg_bot:     number | null
   signal:      number   // 2=BUY 0=SELL 1=NO TRADE
+  executable:  boolean
+  reject_reason: string
+  ml_confidence: number
   signal_sl:   number | null
 }
 

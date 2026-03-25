@@ -30,18 +30,7 @@ def _seconds_to_next_close(tf: str = "1h") -> float:
     return max(remaining + 5, 5)   # at least 5 seconds buffer
 
 
-def _htf_confluence_ok(signal: dict) -> bool:
-    bias = signal.get("htf_bias", {})
-    if not bias:
-        return False
-    h4   = bias.get("h4", 0)
-    sig  = signal.get("signal", "NO TRADE")
 
-    if sig == "BUY":
-        return h4 == 1 or bias.get("full_confluence", False)
-    elif sig == "SELL":
-        return h4 == -1 or bias.get("full_confluence", False)
-    return False
 
 
 async def start_bg_trader():
@@ -108,9 +97,9 @@ async def start_bg_trader():
                 candle_ts = signal.get("candle_time", "")
                 
                 if candle_ts and candle_ts != last_signal_ts:
-                    logger.info(f"[BG_TRADER] Signal: {signal.get('signal')} | Confidence: {signal.get('confidence', 0):.4f} | Candle: {candle_ts}")
+                    logger.info(f"[BG_TRADER] Signal: {signal.get('signal')} | Confidence: {signal.get('confidence', 0):.4f} | Executable: {signal.get('executable')} | Reason: {signal.get('reject_reason')} | Candle: {candle_ts}")
                     
-                    if signal.get("signal") not in ["NO TRADE", None] and _htf_confluence_ok(signal) and signal.get("sl") is not None:
+                    if signal.get("signal") not in ["NO TRADE", None] and signal.get("executable", False) and signal.get("sl") is not None:
                         # ── Step 3: Iterate Over Users and Execute ───────────
                         for sid, session_data in active_enabled_sessions.items():
                             executor = session_data.get("executor")
