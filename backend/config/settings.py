@@ -21,7 +21,7 @@ LOG_LEVEL  = "INFO"
 
 # ── Exchange & Symbol ────────────────────────────────────────
 SYMBOL     = "BTC/USDT"
-EXCHANGE   = "bybit"
+# AUDIT FIX BUG#1: Removed dead EXCHANGE = "bybit" — env override on L145 is the real value
 
 # ── Timeframes ───────────────────────────────────────────────
 TIMEFRAMES = ["15m", "1h", "4h", "1d"]
@@ -63,7 +63,7 @@ SWING_LOOKBACK  = 2
 CISD_BODY_MULT  = 1.5
 CISD_VOL_MULT   = 1.3
 CISD_LOOKBACK   = 20
-PATTERN_WINDOW  = 20
+PATTERN_WINDOW  = 30   # AUDIT FIX BUG#10: increased from 20 → 30 (more time for Swing→CISD→FVG)
 FVG_CANDLES     = 2
 
 # ── Risk Management ──────────────────────────────────────────

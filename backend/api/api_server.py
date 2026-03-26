@@ -174,10 +174,12 @@ class ZoneResponse(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _model_ready() -> bool:
+    # AUDIT FIX BUG#7: Check TF-specific model files, not generic ones
+    from backend.config.settings import MODEL_DIR, SIGNAL_TF
     return (
-        MODEL_PATH.exists() and
-        FEATURES_PATH.exists() and
-        SCALER_PATH.exists()
+        (MODEL_DIR / f"ict_model_{SIGNAL_TF}.pkl").exists() and
+        (MODEL_DIR / f"features_{SIGNAL_TF}.pkl").exists() and
+        (MODEL_DIR / f"scaler_{SIGNAL_TF}.pkl").exists()
     )
 
 
@@ -317,12 +319,16 @@ def get_candles(
         try:
             import joblib
             from backend.services.feature_builder import build_features
-            from backend.config.settings import MODEL_PATH, FEATURES_PATH, SCALER_PATH, MIN_CONFIDENCE
+            # AUDIT FIX BUG#8: Use TF-specific model files, not generic ones
+            from backend.config.settings import MODEL_DIR
+            tf_model_path    = MODEL_DIR / f"ict_model_{timeframe}.pkl"
+            tf_features_path = MODEL_DIR / f"features_{timeframe}.pkl"
+            tf_scaler_path   = MODEL_DIR / f"scaler_{timeframe}.pkl"
             
-            if MODEL_PATH.exists() and FEATURES_PATH.exists() and SCALER_PATH.exists():
-                model = joblib.load(MODEL_PATH)
-                features = joblib.load(FEATURES_PATH)
-                scaler = joblib.load(SCALER_PATH)
+            if tf_model_path.exists() and tf_features_path.exists() and tf_scaler_path.exists():
+                model = joblib.load(tf_model_path)
+                features = joblib.load(tf_features_path)
+                scaler = joblib.load(tf_scaler_path)
                 
                 # We need to build ML features to predict
                 X_df = build_features(df.copy())
@@ -339,7 +345,7 @@ def get_candles(
                             X_scaled = scaler.transform(X_row)
                             probs = model.predict_proba(X_scaled)[0]
                             # XGBoost: 1 represents class 1 (BUY, sig 2), 0 represents 0 (SELL, sig 0)
-                            win_prob = probs[1] if sig == 2 else probs[0]
+                            win_prob = probs[1]  # AUDIT FIX BUG#4: always use WIN (class 1) probability
                             
                             df.at[ts, "ml_confidence"] = round(float(win_prob), 4)
                             
@@ -608,18 +614,18 @@ def get_stats():
         except Exception:
             pass
 
-    # Hardcoded fallback — XGBoost backtest results
+    # AUDIT FIX BUG#12: Return honest zeros instead of hardcoded fake data
     return {
-        "total_signals":    373,
-        "wins":             242,
-        "losses":           131,
-        "win_rate_pct":     64.88,
-        "net_pnl":          29710.03,
-        "net_pnl_pct":      297.1,
-        "final_capital":    39710.03,
-        "max_drawdown_pct": 6.37,
-        "profit_factor":    3.01,
-        "total_fees_paid":  5589.97,
+        "total_signals":    0,
+        "wins":             0,
+        "losses":           0,
+        "win_rate_pct":     0.0,
+        "net_pnl":          0.0,
+        "net_pnl_pct":      0.0,
+        "final_capital":    float(INITIAL_CAPITAL),
+        "max_drawdown_pct": 0.0,
+        "profit_factor":    0.0,
+        "total_fees_paid":  0.0,
         "last_updated":     None,
         "backtest_running": False,
         "monte_carlo":      None,

@@ -307,18 +307,36 @@ def get_live_signal(
             f"Insufficient closed candles: {len(df)} < {min_required} required"
         )
 
-    # ── Step 5: Read last CLOSED candle as the signal candle ─────────────────
-    # df.iloc[-1] is now guaranteed to be a fully closed candle because
-    # _fetch_closed_candles() already dropped the forming one.
-    last       = df.iloc[-1]
-    candle_ts  = df.index[-1]             # timestamp of last closed candle
-    raw_signal = int(last.get("signal", 1))
+    # ── Step 5: Scan recent candles for signals ──────────────────────────────
+    # AUDIT FIX BUG#3: The state machine marks signal=2 (BUY) or signal=0
+    # (SELL) only on the exact candle where a Swing→CISD→FVG completes.
+    # Checking only iloc[-1] missed ~99% of signals. Scan the last N
+    # candles to find the most recent completed pattern.
+    SIGNAL_SCAN_WINDOW = 10  # AUDIT FIX BUG#3: look back 10 candles
+    recent      = df.iloc[-SIGNAL_SCAN_WINDOW:]
+    signal_mask = recent["signal"].isin([0, 2])
+    signal_candles = recent[signal_mask]
 
-    logger.info(
-        f"Last closed candle: {candle_ts}  |  "
-        f"raw_signal={raw_signal}  |  "
-        f"close={float(last['close']):,.2f}"
-    )
+    if len(signal_candles) > 0:
+        last       = signal_candles.iloc[-1]      # AUDIT FIX BUG#3: signal candle row
+        sig_ts     = signal_candles.index[-1]      # AUDIT FIX BUG#3: signal candle time
+        candle_ts  = sig_ts                        # AUDIT FIX BUG#3: for dedup
+        raw_signal = int(last["signal"])
+        logger.info(
+            f"SIGNAL FOUND at {sig_ts}  |  raw_signal={raw_signal}  |  "
+            f"signal close={float(last['close']):,.2f}  |  "
+            f"current close={float(df.iloc[-1]['close']):,.2f}"
+        )
+    else:
+        last       = df.iloc[-1]
+        sig_ts     = df.index[-1]
+        candle_ts  = df.index[-1]
+        raw_signal = 1
+        logger.info(
+            f"No signal in last {SIGNAL_SCAN_WINDOW} candles  |  "
+            f"last candle: {candle_ts}  |  "
+            f"close={float(last['close']):,.2f}"
+        )
 
     # ── Step 6: Model inference ───────────────────────────────────────────────
     # Use only the features the model was trained on.
@@ -328,7 +346,7 @@ def get_live_signal(
     if missing:
         logger.warning(f"Features missing at inference (filled 0): {missing}")
 
-    x_raw = df.loc[[candle_ts], avail].fillna(0)
+    x_raw = df.loc[[sig_ts], avail].fillna(0)  # AUDIT FIX BUG#3: use signal candle features
     x_sc  = pd.DataFrame(
         scaler.transform(x_raw), columns=avail
     )
@@ -364,7 +382,7 @@ def get_live_signal(
         elif htf_info["h4"] == signal_dir_num:
             dynamic_threshold = MIN_CONFIDENCE
         else:
-            dynamic_threshold = MIN_CONFIDENCE + 0.10
+            dynamic_threshold = MIN_CONFIDENCE + 0.03  # AUDIT FIX BUG#5: reduced from +0.10
             
         dynamic_threshold = round(dynamic_threshold, 2)
         
@@ -376,8 +394,8 @@ def get_live_signal(
             logger.info(f"Signal {signal} not executable — {reject_reason}")
 
     # ── Step 8: Position sizing ───────────────────────────────────────────────
-    entry         = float(last["close"])
-    sl_raw        = last.get("signal_sl", np.nan)
+    entry         = float(df.iloc[-1]["close"])  # AUDIT FIX BUG#3: current price for live entry
+    sl_raw        = last.get("signal_sl", np.nan)  # SL from signal candle's swing level
     sl            = float(sl_raw) if not pd.isna(sl_raw) else None
     tp            = None
     risk_amount   = 0.0

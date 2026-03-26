@@ -216,14 +216,11 @@ def run_trading_loop(
                 elif signal["signal"] == "NO TRADE":
                     logger.info("NO TRADE — confidence filter or no pattern.")
                 else:
-                    # ── Step 4: HTF confluence filter ─────────────────────────
-                    if not _htf_confluence_ok(signal):
-                        logger.info(
-                            f"Signal {signal['signal']} blocked by HTF filter. "
-                            f"h4={signal['htf_bias']['h4']} "
-                            f"d1={signal['htf_bias']['d1']}"
-                        )
-                    elif signal.get("sl") is None:
+                    # AUDIT FIX BUG#6: Removed redundant _htf_confluence_ok() gate.
+                    # live_predict.py already handles HTF alignment via dynamic
+                    # confidence thresholds — this was a second filter that compounded
+                    # signal suppression.
+                    if signal.get("sl") is None:
                         logger.warning("Signal has no SL — skipping.")
                     elif signal.get("position_size", 0) <= 0:
                         logger.warning("Position size is 0 — skipping.")
