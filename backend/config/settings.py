@@ -25,9 +25,9 @@ SYMBOL     = "BTC/USDT"
 
 # ── Timeframes ───────────────────────────────────────────────
 TIMEFRAMES = ["15m", "1h", "4h", "1d"]
-SIGNAL_TF  = "1h"
-HTF_LIST   = ["4h", "1d"]
-LTF        = "15m"
+SIGNAL_TF  = "15m"
+HTF_LIST   = ["1h", "4h"]
+LTF        = "1m"
 
 TF_LABELS  = {
     "15m": "15 Minute",
