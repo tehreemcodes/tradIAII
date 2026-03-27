@@ -317,15 +317,23 @@ def get_live_signal(
     signal_mask = recent["signal"].isin([0, 2])
     signal_candles = recent[signal_mask]
 
+    is_stale = False
     if len(signal_candles) > 0:
         last       = signal_candles.iloc[-1]      # AUDIT FIX BUG#3: signal candle row
         sig_ts     = signal_candles.index[-1]      # AUDIT FIX BUG#3: signal candle time
         candle_ts  = sig_ts                        # AUDIT FIX BUG#3: for dedup
         raw_signal = int(last["signal"])
+        
+        # STALE SIGNAL CHECK: if the signal didn't occur exactly on the most 
+        # recently closed candle, it is a historical/stale signal.
+        if sig_ts < df.index[-1]:
+            is_stale = True
+
         logger.info(
             f"SIGNAL FOUND at {sig_ts}  |  raw_signal={raw_signal}  |  "
             f"signal close={float(last['close']):,.2f}  |  "
-            f"current close={float(df.iloc[-1]['close']):,.2f}"
+            f"current close={float(df.iloc[-1]['close']):,.2f}  |  "
+            f"stale={is_stale}"
         )
     else:
         last       = df.iloc[-1]
@@ -391,6 +399,12 @@ def get_live_signal(
             executable = True
         else:
             reject_reason = f"ML Confidence {win_prob:.2f} < {dynamic_threshold:.2f} (Required)"
+            logger.info(f"Signal {signal} not executable — {reject_reason}")
+            
+        # Hard block if the signal is stale (to prevent execution on server restarts)
+        if executable and is_stale:
+            executable = False
+            reject_reason = "Signal is stale (not from current candle close)"
             logger.info(f"Signal {signal} not executable — {reject_reason}")
 
     # ── Step 8: Position sizing ───────────────────────────────────────────────
