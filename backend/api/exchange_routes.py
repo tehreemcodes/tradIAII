@@ -31,7 +31,7 @@ from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 
 from backend.config.settings import (
-    INITIAL_CAPITAL, EXCHANGE_TESTNET, SYMBOL, RISK_PCT,
+    INITIAL_CAPITAL, EXCHANGE_TESTNET, SYMBOL, RISK_PCT, DEFAULT_LEVERAGE,
 )
 from backend.services.credential_store import CredentialStore
 from backend.services.trade_executor   import TradeExecutor, ExecutorError
@@ -129,6 +129,7 @@ def _get_executor(session_id: str) -> TradeExecutor:
         api_secret = creds["api_secret"],
         exchange   = creds["exchange"],
         testnet    = creds["testnet"],
+        leverage   = DEFAULT_LEVERAGE,
     )
     ok = executor.connect()
     if not ok:
@@ -141,6 +142,7 @@ def _get_executor(session_id: str) -> TradeExecutor:
         "executor":  executor,
         "enabled":   False,
         "risk_pct":  RISK_PCT,
+        "leverage":  DEFAULT_LEVERAGE,
     }
     return executor
 
@@ -215,6 +217,7 @@ def connect_exchange(req: ConnectRequest):
         "executor": executor,
         "enabled":  False,
         "risk_pct": RISK_PCT,
+        "leverage": DEFAULT_LEVERAGE,
     }
 
     now = datetime.now(timezone.utc).isoformat()

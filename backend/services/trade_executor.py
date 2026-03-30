@@ -53,6 +53,7 @@ class TradeExecutor:
         api_secret: Optional[str]  = None,
         exchange:   Optional[str]  = None,
         testnet:    Optional[bool] = None,
+        leverage:   Optional[int]  = None,
     ):
         """
         Initialise executor.
@@ -69,6 +70,7 @@ class TradeExecutor:
         self._api_secret    = api_secret or settings.EXCHANGE_API_SECRET or ""
         self._exchange_name = (exchange  or settings.EXCHANGE).lower()
         self._testnet       = testnet if testnet is not None else settings.EXCHANGE_TESTNET
+        self._leverage      = leverage if leverage is not None else settings.DEFAULT_LEVERAGE
 
         self._exchange:  Optional[ccxt.Exchange] = None
         self._connected: bool = False
@@ -258,6 +260,61 @@ class TradeExecutor:
             logger.error(f"get_open_positions failed: {e}")
             return []
 
+    # ── Pre-Order Margin Validation ──────────────────────────────────────────
+
+    def _validate_margin(
+        self, position_size: float, entry_price: float, side: str
+    ) -> float:
+        """
+        Validate that the position fits within available margin.
+
+        If required_margin > available_balance, scale down position_size
+        so it fits (with a 5% safety buffer).  Returns the (possibly
+        reduced) position_size, or 0.0 if even the minimum trade is
+        impossible.
+        """
+        MIN_NOTIONAL = 5.0   # Binance Futures minimum notional (USD)
+        MARGIN_BUFFER = 0.95  # use at most 95% of available balance
+
+        try:
+            available = self.get_balance()
+        except Exception as e:
+            logger.error(f"_validate_margin: could not fetch balance: {e}")
+            return position_size   # proceed optimistically
+
+        notional        = position_size * entry_price
+        required_margin = notional / self._leverage
+
+        logger.info(
+            f"[MARGIN CHECK] size={position_size:.6f} | "
+            f"notional=${notional:,.2f} | leverage={self._leverage}x | "
+            f"required_margin=${required_margin:,.2f} | "
+            f"available=${available:,.2f}"
+        )
+
+        if required_margin <= available * MARGIN_BUFFER:
+            return position_size   # fits fine
+
+        # Scale down to fit within available margin
+        max_notional      = available * MARGIN_BUFFER * self._leverage
+        adjusted_size     = max_notional / entry_price
+
+        adjusted_notional = adjusted_size * entry_price
+        if adjusted_notional < MIN_NOTIONAL:
+            logger.error(
+                f"[MARGIN CHECK] Scaled-down notional ${adjusted_notional:,.2f} "
+                f"is below Binance minimum ${MIN_NOTIONAL}. Trade impossible."
+            )
+            return 0.0
+
+        logger.warning(
+            f"[MARGIN CHECK] Position scaled down: "
+            f"{position_size:.6f} → {adjusted_size:.6f} "
+            f"(notional ${notional:,.2f} → ${adjusted_notional:,.2f}) "
+            f"to fit available margin ${available:,.2f}"
+        )
+        return adjusted_size
+
     # ── Order Placement ───────────────────────────────────────────────────────
 
     def place_order(
@@ -295,10 +352,22 @@ class TradeExecutor:
         if not self.connected:
             raise ExecutorError("Exchange not connected.")
 
+        # ── Set leverage (configurable, default 20x) ─────────────────────────
         try:
-            self._exchange.set_leverage(1, PERP_SYMBOL)
-        except Exception:
-            pass
+            self._exchange.set_leverage(self._leverage, PERP_SYMBOL)
+            logger.info(f"Setting leverage to {self._leverage}x for {PERP_SYMBOL}")
+        except Exception as e:
+            logger.warning(f"Could not set leverage to {self._leverage}x: {e}")
+
+        # ── Pre-order margin validation & auto scale-down ────────────────────
+        position_size = self._validate_margin(
+            position_size, entry_price, side
+        )
+        if position_size <= 0:
+            raise ExecutorError(
+                f"Position size too small after margin validation. "
+                f"Balance may be insufficient for minimum trade."
+            )
 
         try:
             if self.is_binance:

@@ -77,6 +77,7 @@ REWARD_RATIO       = 2.0       # 1:2 minimum R:R
 COOLDOWN_MINUTES   = 5
 MAX_OPEN_TRADES    = 1
 MAX_NOTIONAL_MULT  = 10.0
+DEFAULT_LEVERAGE   = 20         # Binance Futures leverage (20x default)
 
 # FIX: Minimum SL distance as % of price
 # Prevents degenerate signals with near-zero SL (causes position size explosion)
