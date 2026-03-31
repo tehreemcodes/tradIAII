@@ -71,7 +71,7 @@ INITIAL_CAPITAL    = 10_000.0
 
 # FIX: Reduced from 10% to 1% — professional standard
 # 10% risk per trade is reckless; 0.5-2% is industry standard
-RISK_PCT           = 0.01      # 1% risk per trade
+RISK_PCT           = 0.07      # 7% risk per trade for $20 demo account
 
 REWARD_RATIO       = 2.0       # 1:2 minimum R:R
 COOLDOWN_MINUTES   = 5
@@ -81,7 +81,7 @@ DEFAULT_LEVERAGE   = 20         # Binance Futures leverage (20x default)
 
 # FIX: Minimum SL distance as % of price
 # Prevents degenerate signals with near-zero SL (causes position size explosion)
-MIN_SL_PCT         = 0.003     # SL must be >= 0.3% of entry price away
+MIN_SL_PCT         = 0.001     # SL must be >= 0.1% of entry price away
 SL_BUFFER_PCT = 0.0008  # 0.08% beyond swing — adjust per asset
 
 # FIX: Slippage and fees (realistic crypto exchange costs)
@@ -90,8 +90,8 @@ FEE_PCT            = 0.0006    # 0.06% taker fee per side (Bybit standard)
 ROUND_TRIP_COST    = (SLIPPAGE_PCT + FEE_PCT) * 2   # both sides
 
 # FIX: Equity protection rules
-MAX_DRAWDOWN_STOP  = 0.20      # Stop trading if drawdown exceeds 20%
-MAX_DAILY_LOSS_PCT = 0.03      # Stop trading for the day after 3% daily loss
+MAX_DRAWDOWN_STOP  = 0.50      # Stop trading if drawdown exceeds 50%
+MAX_DAILY_LOSS_PCT = 0.40      # Stop trading for the day after 40% daily loss
 
 # ── Trade Labeling ───────────────────────────────────────────
 LABEL_FORWARD  = {

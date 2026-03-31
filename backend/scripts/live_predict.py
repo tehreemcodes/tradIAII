@@ -324,9 +324,11 @@ def get_live_signal(
         candle_ts  = sig_ts                        # AUDIT FIX BUG#3: for dedup
         raw_signal = int(last["signal"])
         
-        # STALE SIGNAL CHECK: if the signal didn't occur exactly on the most 
-        # recently closed candle, it is a historical/stale signal.
-        if sig_ts < df.index[-1]:
+        # STALE SIGNAL CHECK: if the signal didn't occur within the last 3 candles,
+        # it is a historical/stale signal.
+        tf_secs = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+        max_age_secs = tf_secs.get(timeframe, 900) * 3
+        if (df.index[-1] - sig_ts).total_seconds() > max_age_secs:
             is_stale = True
 
         logger.info(
