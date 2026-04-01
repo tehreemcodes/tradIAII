@@ -234,6 +234,26 @@ class TradeTracker:
             "last_trade_at":   closed[-1].get("closed_at"),
         }
 
+    def get_daily_pnl(self) -> float:
+        """
+        Calculate net P&L for all trades closed on the current UTC day (since 00:00:00).
+        """
+        with self._lock:
+            closed = self._data.get("closed", [])
+            if not closed:
+                return 0.0
+
+            now_utc   = datetime.now(timezone.utc)
+            today_str = now_utc.strftime("%Y-%m-%d")  # e.g., "2026-04-01"
+            
+            daily_pnl = 0.0
+            for trade in closed:
+                closed_at = trade.get("closed_at", "")
+                if closed_at.startswith(today_str):
+                    daily_pnl += trade.get("pnl", 0.0)
+
+            return round(daily_pnl, 4)
+
     def get_stats(self) -> dict:
         """Return the latest computed live stats."""
         with self._lock:

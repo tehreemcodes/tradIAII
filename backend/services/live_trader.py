@@ -39,7 +39,7 @@ from pathlib import Path
 from backend.config.logging_setup import setup_logging
 from backend.config.settings import (
     SIGNAL_TF, LIVE_TRADING_ENABLED, MAX_OPEN_POSITIONS,
-    INITIAL_CAPITAL, MIN_CONFIDENCE,
+    INITIAL_CAPITAL, MIN_CONFIDENCE, MAX_DAILY_LOSS_PCT,
 )
 from backend.scripts.live_predict    import get_live_signal
 from backend.services.trade_executor import TradeExecutor, ExecutorError
@@ -225,6 +225,31 @@ def run_trading_loop(
                                 logger.warning(f"No matching closed records found for {trade_symbol} (opened at {trade['opened_at']}) — skipping close")
                                 continue
 
+
+            # ── Step 1.5: Daily Loss Limit Check ─────────────────────────────
+            total_pnl_today = tracker.get_daily_pnl()
+            stats           = tracker.get_stats()
+            current_balance = stats.get("running_capital", INITIAL_CAPITAL)
+            starting_balance_today = current_balance - total_pnl_today
+
+            if total_pnl_today < 0:
+                loss_pct = abs(total_pnl_today / starting_balance_today) if starting_balance_today > 0 else 0
+                
+                # Dynamic log with limit calculation
+                limit_val = starting_balance_today * MAX_DAILY_LOSS_PCT
+                logger.info(
+                    f"[RISK] Daily PnL: {total_pnl_today:.2f} | Limit: {-limit_val:.2f}"
+                )
+
+                if loss_pct >= MAX_DAILY_LOSS_PCT:
+                    logger.warning(
+                        f"DAILY LOSS LIMIT REACHED ({loss_pct*100:.1f}%) — "
+                        "skipping signal check until next UTC day."
+                    )
+                    # Skip signal check but stay in loop (wait for next candle)
+                    # This allows the bot to resume automatically the next day
+                    time.sleep(_seconds_to_next_close(SIGNAL_TF))
+                    continue
 
             # ── Step 2: Check if we already have max positions ────────────────
             open_count = len(tracker.get_open_trades())
