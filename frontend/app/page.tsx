@@ -85,7 +85,7 @@ function Topbar({
         )}
       </div>
 
-      {/* Sessions + Clock */}
+      {/* Sessions + Clock + History */}
       <div className="flex items-center gap-5">
         {sessions.map(s => (
           <div key={s.name} className="flex items-center gap-1.5">
@@ -104,6 +104,17 @@ function Topbar({
             </span>
           </div>
         ))}
+        
+        <span className="text-white/10 text-xs">|</span>
+
+        <a 
+          href="/history"
+          className="text-xs font-bold hover:text-teal-400 transition-colors"
+          style={{ color: 'rgba(255,255,255,0.6)' }}
+        >
+          HISTORY
+        </a>
+
         <span
           className="mono text-xs border-l pl-5"
           style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.08)' }}

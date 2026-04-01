@@ -636,6 +636,7 @@ def get_live_status(x_session_id: Optional[str] = Header(None)):
     import backend.config.settings as settings
     from backend.api.exchange_routes import _active_sessions
     from backend.scripts.live_predict import get_live_signal
+    from backend.api.trade_routes import _tracker
     
     connected = False
     
@@ -645,11 +646,13 @@ def get_live_status(x_session_id: Optional[str] = Header(None)):
         if executor:
             connected = executor.connected
 
+    stats = _tracker.get_stats()
+    
     sig = None
     try:
-        sig_data = get_live_signal(timeframe=settings.SIGNAL_TF)
-        # get_live_signal might return a dict directly
-        sig = sig_data if isinstance(sig_data, dict) else sig_data
+        # Pass capital to get_live_signal if available
+        capital = stats.get("running_capital", settings.INITIAL_CAPITAL)
+        sig = get_live_signal(capital=capital, timeframe=settings.SIGNAL_TF)
     except Exception as e:
         logger.error(f"Failed to fetch live signal for status: {e}")
 
@@ -658,8 +661,12 @@ def get_live_status(x_session_id: Optional[str] = Header(None)):
         "paper_mode": settings.PAPER_MODE,
         "active_timeframe": settings.SIGNAL_TF,
         "last_signal": sig,
-        "today_pnl": 0.0,
-        "daily_drawdown_pct": 0.0
+        "total_pnl": stats.get("total_pnl", 0.0),
+        "win_rate_pct": stats.get("win_rate_pct", 0.0),
+        "running_capital": stats.get("running_capital", settings.INITIAL_CAPITAL),
+        "max_drawdown_pct": stats.get("max_drawdown_pct", 0.0),
+        "today_pnl": stats.get("total_pnl", 0.0), # Fallback for today_pnl for now
+        "daily_drawdown_pct": stats.get("max_drawdown_pct", 0.0)
     }
 
 @app.post("/api/debug/connect")

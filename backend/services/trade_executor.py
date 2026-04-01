@@ -491,6 +491,23 @@ class TradeExecutor:
         except Exception as e:
             raise ExecutorError(f"Close failed: {e}") from e
 
+    def cancel_all_conditional_orders(self, symbol: Optional[str] = None) -> None:
+        """Cancel all open orders (SL/TP triggers) for the symbol."""
+        if self.paper_mode or not self.connected:
+            return
+        
+        target = symbol or PERP_SYMBOL
+        # Support both 'BTCUSDT' or 'BTC/USDT:USDT' formats
+        if ":" not in target and self.is_binance:
+            target = target.replace("/", "") + ":USDT"
+
+        try:
+            if self.is_binance:
+                self._exchange.cancel_all_orders(target)
+                logger.info(f"Cancelled all conditional orders for {target}")
+        except Exception as e:
+            logger.warning(f"Failed to cancel conditional orders for {target}: {e}")
+
     def get_closed_pnl(self, limit: int = 50) -> list[dict]:
         if not self.connected:
             return []
@@ -507,7 +524,8 @@ class TradeExecutor:
                                     "realizedPnl" if self.is_binance
                                     else "closedPnl", 0)),
                     "fee":       float(r.get("fee", {}).get("cost", 0)),
-                    "timestamp": r.get("datetime"),
+                    "timestamp": r.get("timestamp"), # raw ms
+                    "datetime":  r.get("datetime"),  # ISO string
                 }
                 for r in records
             ]

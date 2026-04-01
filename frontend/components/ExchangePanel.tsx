@@ -113,8 +113,16 @@ function StatusBadge({ connected, testnet }: { connected: boolean; testnet?: boo
   )
 }
 
-function TradeRow({ trade }: { trade: ClosedTrade }) {
+function TradeRow({ trade }: { trade: ClosedTrade & { size?: number } }) {
   const win = trade.outcome === 'TP'
+  
+  // Calculate ROI (20x leverage)
+  let roi = 0
+  if (trade.pnl != null && trade.entry_price != null && trade.size != null) {
+     const marginUsed = (trade.entry_price * trade.size) / 20
+     roi = (trade.pnl / marginUsed) * 100
+  }
+
   return (
     <div className="flex items-center justify-between py-1.5 border-b border-white/[0.03] last:border-0">
       <div className="flex items-center gap-2">
@@ -128,6 +136,7 @@ function TradeRow({ trade }: { trade: ClosedTrade }) {
       <div className="flex items-center gap-2">
         <span className="mono text-[10px] font-semibold" style={{ color: win ? '#2dd4bf' : '#f43f5e' }}>
           {trade.pnl >= 0 ? '+' : ''}{fmt$(trade.pnl)}
+          <span className="ml-1 opacity-40 text-[8px]">({roi >= 0 ? '+' : ''}{roi.toFixed(1)}%)</span>
         </span>
         <span
           className="text-[9px] px-1.5 py-0.5 rounded font-bold"

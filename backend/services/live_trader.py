@@ -171,23 +171,58 @@ def run_trading_loop(
                     # Live mode: exchange manages SL/TP natively.
                     # We just check if positions are still open.
                     exchange_positions = executor.get_open_positions()
-                    exchange_ids       = {p.get("symbol") for p in exchange_positions}
+                    exchange_ids       = {p.get("symbol").replace("/", "").split(":")[0] for p in exchange_positions}
+
+                    if open_trades:
+                        closed_records = executor.get_closed_pnl(limit=50)
+                    else:
+                        closed_records = []
 
                     for trade in open_trades:
-                        # If trade no longer on exchange → it was closed by SL/TP
-                        if not exchange_positions:
-                            # Fetch closed PnL from exchange to get actual outcome
-                            closed_records = executor.get_closed_pnl(limit=5)
+                        # Normalize internal symbol BTC/USDT -> BTCUSDT for matching
+                        trade_symbol = trade.get("symbol", "").replace("/", "").split(":")[0]
+
+                        # If trade symbol is no longer in open exchange positions -> it was closed
+                        if trade_symbol not in exchange_ids:
+                            logger.info(f"Detected closed position for {trade_symbol}. Fetching matching records...")
+                            
+                            matched_records = []
+                            try:
+                                opened_ts = datetime.fromisoformat(trade["opened_at"].replace("Z", "+00:00")).timestamp()
+                            except Exception as e:
+                                logger.error(f"Failed to parse opened_at for trade {trade['id']}: {e}")
+                                continue
+
                             for record in closed_records:
-                                pnl     = float(record.get("pnl", 0))
-                                outcome = "TP" if pnl > 0 else "SL"
+                                # CCXT record symbol might be 'BTC/USDT:USDT' or 'BTCUSDT'
+                                record_symbol = record.get("symbol", "").replace("/", "").split(":")[0]
+                                # record_ts is raw ms from our update to get_closed_pnl
+                                record_ts = (record.get("timestamp") or 0) / 1000
+
+                                if record_symbol == trade_symbol and record_ts >= opened_ts:
+                                    matched_records.append(record)
+
+                            if matched_records:
+                                total_pnl = sum(float(r.get("pnl", 0)) for r in matched_records)
+                                last_record = matched_records[-1]
+                                close_price = float(last_record.get("price", 0))
+                                outcome = "TP" if total_pnl > 0.0 else "SL"
+
                                 tracker.close_trade(
                                     order_id    = trade["id"],
                                     outcome     = outcome,
-                                    close_price = float(record.get("price", 0)),
-                                    pnl         = pnl,
+                                    close_price = close_price,
+                                    pnl         = total_pnl,
                                 )
-                            break
+
+                                executor.cancel_all_conditional_orders(symbol=trade.get("symbol"))
+                                logger.info(
+                                    f"Trade closed | {trade_symbol} | outcome={outcome} | pnl={total_pnl:.2f}"
+                                )
+                            else:
+                                logger.warning(f"No matching closed records found for {trade_symbol} (opened at {trade['opened_at']}) — skipping close")
+                                continue
+
 
             # ── Step 2: Check if we already have max positions ────────────────
             open_count = len(tracker.get_open_trades())

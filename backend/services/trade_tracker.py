@@ -244,7 +244,7 @@ class TradeTracker:
         with self._lock:
             return {
                 "open":   list(self._data["open"]),
-                "closed": list(self._data["closed"][-50:]),  # last 50
+                "closed": list(self._data["closed"]),
                 "stats":  dict(self._data.get("stats", {})),
             }
 

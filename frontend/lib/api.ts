@@ -206,6 +206,51 @@ export const api = {
   /** Backtest running status */
   backtestStatus: () =>
     get('/api/backtest/status'),
+
+  /** Live trades and stats */
+  trades: (): Promise<TradesResponse> =>
+    get('/api/trades'),
+}
+
+// ── Trades Types ──────────────────────────────────────────────
+export interface Trade {
+  id: string
+  status: string
+  paper: boolean
+  direction: SignalType
+  symbol: string
+  size: number
+  entry_price: number
+  sl_price: number
+  tp_price: number
+  signal_ts: string
+  opened_at: string
+  exchange: string
+  outcome?: string
+  close_price?: number
+  pnl?: number
+  closed_at?: string
+}
+
+export interface LiveStats {
+  total_trades: number
+  wins: number
+  losses: number
+  win_rate_pct: number
+  total_pnl: number
+  total_pnl_pct: number
+  running_capital: number
+  profit_factor: number
+  max_drawdown_pct: number
+  last_trade_at?: string
+}
+
+export interface TradesResponse {
+  open: Trade[]
+  closed: Trade[]
+  stats: LiveStats
+  mode: string
+  testnet: boolean
 }
 
 // ── Formatting Helpers ────────────────────────────────────────

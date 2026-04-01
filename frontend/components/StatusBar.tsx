@@ -24,6 +24,9 @@ interface LiveStatus {
   last_signal:         { signal?: string; confidence?: number; entry?: number } | null
   today_pnl:           number
   daily_drawdown_pct:  number
+  win_rate_pct:        number
+  running_capital:     number
+  total_pnl:           number
 }
 
 const authHeaders = () => {
@@ -98,7 +101,7 @@ export default function StatusBar() {
     )
   }
 
-  const pnlColor = status.today_pnl >= 0 ? '#2dd4bf' : '#f43f5e'
+  const pnlColor = status.total_pnl >= 0 ? '#2dd4bf' : '#f43f5e'
   const sigColor = status.last_signal?.signal === 'BUY' ? '#2dd4bf'
     : status.last_signal?.signal === 'SELL' ? '#f43f5e'
     : 'rgba(255,255,255,0.4)'
@@ -159,6 +162,9 @@ export default function StatusBar() {
         {/* Active TF */}
         <Pill label="TF" value={status.active_timeframe?.toUpperCase() ?? '—'} color="#60a5fa" />
 
+        {/* Win Rate */}
+        <Pill label="Win Rate" value={`${status.win_rate_pct?.toFixed(1) ?? '0.0'}%`} color="#f59e0b" />
+
         {/* Last signal */}
         {status.last_signal && (
           <Pill
@@ -173,15 +179,25 @@ export default function StatusBar() {
         )}
       </div>
 
-      {/* Right — daily PnL */}
+      {/* Right — Capital + PnL */}
       <div className="flex items-center gap-2">
         <div
           className="px-2.5 py-1 rounded-lg"
           style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}
         >
-          <p className="text-[9px] text-white/20 uppercase tracking-wider">Today P&L</p>
+          <p className="text-[9px] text-white/20 uppercase tracking-wider">Capital</p>
+          <p className="mono text-[11px] font-bold text-white/90">
+            ${status.running_capital?.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          </p>
+        </div>
+
+        <div
+          className="px-2.5 py-1 rounded-lg"
+          style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}
+        >
+          <p className="text-[9px] text-white/20 uppercase tracking-wider">Total P&L</p>
           <p className="mono text-[11px] font-bold" style={{ color: pnlColor }}>
-            {status.today_pnl >= 0 ? '+' : ''}${Math.abs(status.today_pnl).toFixed(2)}
+            {status.total_pnl >= 0 ? '+' : '-'}${Math.abs(status.total_pnl).toFixed(2)}
           </p>
         </div>
 
