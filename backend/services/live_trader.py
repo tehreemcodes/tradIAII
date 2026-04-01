@@ -199,11 +199,12 @@ def run_trading_loop(
                                 # record_ts is raw ms from our update to get_closed_pnl
                                 record_ts = (record.get("timestamp") or 0) / 1000
 
-                                if record_symbol == trade_symbol and record_ts >= opened_ts:
+                                if record_symbol == trade_symbol and record_ts >= (opened_ts - 2):
                                     matched_records.append(record)
 
                             if matched_records:
                                 total_pnl = sum(float(r.get("pnl", 0)) for r in matched_records)
+                                matched_records.sort(key=lambda r: r.get("timestamp", 0))
                                 last_record = matched_records[-1]
                                 close_price = float(last_record.get("price", 0))
                                 outcome = "TP" if total_pnl > 0.0 else "SL"
@@ -215,7 +216,8 @@ def run_trading_loop(
                                     pnl         = total_pnl,
                                 )
 
-                                executor.cancel_all_conditional_orders(symbol=trade.get("symbol"))
+                                symbol = trade.get("symbol", "").replace("/", "").split(":")[0]
+                                executor.cancel_all_conditional_orders(symbol=symbol)
                                 logger.info(
                                     f"Trade closed | {trade_symbol} | outcome={outcome} | pnl={total_pnl:.2f}"
                                 )
