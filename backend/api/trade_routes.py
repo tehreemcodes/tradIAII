@@ -14,6 +14,8 @@ Endpoints:
     POST /api/trades/close-all    emergency close all paper positions
     POST /api/trades/clear        wipe all trades (start fresh demo run)
     GET  /api/trades/exchange     real-time exchange position data
+    GET  /api/analytics/summary   aggregated performance metrics
+    GET  /api/analytics/trades    detailed audit logs
 """
 import logging
 from datetime import datetime, timezone
@@ -206,12 +208,31 @@ def clear_all_trades():
     """
     Wipe all open and closed trades and reset stats.
     Use this to start a fresh demo run.
-    Requires confirmation param: ?confirm=yes
     """
-    from fastapi import Query as FQuery
     _tracker.clear_all()
     return {
         "status":  "ok",
         "message": "All trades cleared. Ready for a fresh demo run.",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ── Analytics Endpoints ───────────────────────────────────────────────────────
+
+@router.get("/api/analytics/summary")
+def get_analytics_summary():
+    """Fetch aggregated PnL, fee, and win rate metrics from the analytics DB."""
+    from backend.services.analytics_db import AnalyticsDB
+    adb = AnalyticsDB()
+    return adb.get_summary()
+
+
+@router.get("/api/analytics/trades")
+def get_analytics_trades(limit: int = 100):
+    """Fetch detailed trade-by-trade analytics from the DB."""
+    from backend.services.analytics_db import AnalyticsDB
+    adb = AnalyticsDB()
+    return {
+        "trades": adb.get_all_trades(limit=limit),
+        "count":  limit
     }
