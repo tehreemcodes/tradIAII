@@ -29,9 +29,9 @@ from pathlib import Path
 from typing import Optional
 
 from backend.config.settings import TRADE_LOG_PATH, INITIAL_CAPITAL
+from backend.services.analytics_db import AnalyticsDB
 
 logger = logging.getLogger(__name__)
-
 
 class TradeTracker:
 
@@ -39,6 +39,7 @@ class TradeTracker:
         self._path  = path
         self._lock  = threading.Lock()
         self._data  = self._load()
+        self._adb   = AnalyticsDB()
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -87,6 +88,10 @@ class TradeTracker:
         with self._lock:
             self._data["open"].append(order)
             self._save()
+            
+            # Record to structured analytics DB
+            self._adb.record_open_trade(order)
+            
             logger.info(
                 f"TradeTracker: opened {order['direction']} "
                 f"id={order['id']} entry={order['entry_price']}"
@@ -99,6 +104,7 @@ class TradeTracker:
         close_price: float,
         pnl:         float,  # net P&L in USDT after fees
         closed_at:   Optional[str] = None,
+        fees:        float = 0.0,
     ) -> Optional[dict]:
         """
         Move a trade from open → closed and record the outcome.
@@ -118,11 +124,15 @@ class TradeTracker:
                 "outcome":     outcome,
                 "close_price": close_price,
                 "pnl":         pnl,
+                "fees":        fees,
                 "closed_at":   closed_at or datetime.now(timezone.utc).isoformat(),
             })
             self._data["closed"].append(trade)
             self._data["stats"] = self._compute_stats()
             self._save()
+
+            # Record actual performance to Analytics DB
+            self._adb.record_close_trade(order_id, trade)
 
             logger.info(
                 f"TradeTracker: closed {trade['direction']} id={order_id} "

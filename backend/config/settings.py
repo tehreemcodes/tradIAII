@@ -71,13 +71,13 @@ INITIAL_CAPITAL    = 10_000.0
 
 # FIX: Reduced from 10% to 1% — professional standard
 # 10% risk per trade is reckless; 0.5-2% is industry standard
-RISK_PCT           = 0.07      # 7% risk per trade for $20 demo account
+RISK_PCT           = 0.02      # 2% risk per trade for $20 demo account
 
 REWARD_RATIO       = 2.0       # 1:2 minimum R:R
 COOLDOWN_MINUTES   = 5
 MAX_OPEN_TRADES    = 1
 MAX_NOTIONAL_MULT  = 10.0
-DEFAULT_LEVERAGE   = 20         # Binance Futures leverage (20x default)
+DEFAULT_LEVERAGE   = 5         # Binance Futures leverage (20x default)
 
 # FIX: Minimum SL distance as % of price
 # Prevents degenerate signals with near-zero SL (causes position size explosion)
@@ -148,4 +148,6 @@ EXCHANGE_API_KEY      = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET   = os.getenv("EXCHANGE_API_SECRET", "")
 EXCHANGE_TESTNET      = False
 TRADE_LOG_PATH        = LOG_DIR / "live_trades.json"
+ANALYTICS_DB_PATH     = DATA_DIR / "analytics.db"
+ORDER_TYPE            = "market"   # "market" or "limit"
 MAX_OPEN_POSITIONS    = 1

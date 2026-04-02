@@ -115,6 +115,14 @@ function Topbar({
           HISTORY
         </a>
 
+        <a 
+          href="/analytics"
+          className="text-xs font-bold hover:text-teal-400 transition-colors"
+          style={{ color: 'rgba(255,255,255,0.6)' }}
+        >
+          ANALYTICS
+        </a>
+
         <span
           className="mono text-xs border-l pl-5"
           style={{ color: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.08)' }}

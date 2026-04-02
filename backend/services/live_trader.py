@@ -126,6 +126,10 @@ def run_trading_loop(
         if not connected:
             logger.error("Failed to connect to exchange. Exiting.")
             sys.exit(1)
+        
+        # SAFETY: Cancel any orphan SL/TP orders from previous runs
+        executor.cancel_all_conditional_orders(settings.SYMBOL)
+        
         # Use real balance if live trading
         real_balance = executor.get_balance()
         if real_balance > 0:
@@ -203,7 +207,9 @@ def run_trading_loop(
                                     matched_records.append(record)
 
                             if matched_records:
-                                total_pnl = sum(float(r.get("pnl", 0)) for r in matched_records)
+                                total_pnl  = sum(float(r.get("pnl", 0)) for r in matched_records)
+                                total_fees = sum(float(r.get("fee", 0)) for r in matched_records)
+                                
                                 matched_records.sort(key=lambda r: r.get("timestamp", 0))
                                 last_record = matched_records[-1]
                                 close_price = float(last_record.get("price", 0))
@@ -214,6 +220,8 @@ def run_trading_loop(
                                     outcome     = outcome,
                                     close_price = close_price,
                                     pnl         = total_pnl,
+                                    closed_at   = last_record.get("datetime"),
+                                    fees        = total_fees
                                 )
 
                                 symbol = trade.get("symbol", "").replace("/", "").split(":")[0]

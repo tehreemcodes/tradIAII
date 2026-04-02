@@ -210,6 +210,51 @@ export const api = {
   /** Live trades and stats */
   trades: (): Promise<TradesResponse> =>
     get('/api/trades'),
+
+  /** Analytics summary (DB-backed) */
+  analyticsSummary: (): Promise<AnalyticsSummary> =>
+    get('/api/analytics/summary'),
+
+  /** Detailed analytics trade list (DB-backed) */
+  analyticsTrades: (limit: number = 100): Promise<AnalyticsTradesResponse> =>
+    get(`/api/analytics/trades?limit=${limit}`),
+}
+
+// ── Analytics Types ───────────────────────────────────────────
+export interface AnalyticsSummary {
+  total_trades: number
+  net_pnl: number
+  total_fees: number
+  win_rate_pct: number
+  history: Array<{ at: string; pnl: number }>
+}
+
+export interface AnalyticsTrade {
+  id: number
+  trade_id: string
+  symbol: string
+  direction: string
+  side: string
+  entry_price: number
+  exit_price: number
+  expected_profit: number
+  expected_loss: number
+  actual_pnl: number
+  fees: number
+  slippage: number
+  order_type: string
+  leverage: number
+  position_size: number
+  rr_ratio: number
+  opened_at: string
+  closed_at: string
+  status: string
+  outcome: string
+}
+
+export interface AnalyticsTradesResponse {
+  trades: AnalyticsTrade[]
+  count: number
 }
 
 // ── Trades Types ──────────────────────────────────────────────

@@ -379,9 +379,9 @@ class TradeExecutor:
                     side, position_size, sl_price, tp_price
                 )
 
-            filled_price = float(order.get("average") or entry_price)
+            filled_price = float(order.get("average") or order.get("price") or entry_price)
             logger.info(
-                f"[LIVE] Order filled: id={order['id']} "
+                f"[LIVE] Order ({settings.ORDER_TYPE}): id={order['id']} "
                 f"price={filled_price:,.2f}"
             )
 
@@ -398,6 +398,7 @@ class TradeExecutor:
                 "signal_ts":   signal_ts,
                 "opened_at":   datetime.now(timezone.utc).isoformat(),
                 "exchange":    self._exchange_name,
+                "order_type":  settings.ORDER_TYPE,
             }
 
         except ccxt.InsufficientFunds as e:
@@ -411,23 +412,35 @@ class TradeExecutor:
         self, side, position_size, entry_price, sl_price, tp_price
     ) -> dict:
         close_side  = "sell" if side == "buy" else "buy"
+        order_type  = settings.ORDER_TYPE.lower()
+        
+        # Apply slight offset to limit price to improve fill chance (0.01%)
+        # If BUY: slightly higher, if SELL: slightly lower than structural entry
+        offset = 1.0001 if side == "buy" else 0.9999
+        limit_price = round(entry_price * offset, 2)
+
+        params = {"positionSide": "BOTH"}
+        if order_type == "limit":
+            params["timeInForce"] = "GTC"
+
         entry_order = self._exchange.create_order(
             symbol = PERP_SYMBOL,
-            type   = "market",
+            type   = order_type,
             side   = side,
             amount = position_size,
-            params = {"positionSide": "BOTH"},
+            price  = limit_price if order_type == "limit" else None,
+            params = params,
         )
-        logger.info(f"Binance entry: {entry_order['id']}")
+        logger.info(f"Binance entry ({order_type}): {entry_order['id']} @ {limit_price if order_type == 'limit' else 'MARKET'}")
 
-        for order_type, price, label in [
+        for o_type, price, label in [
             ("stop_market",        sl_price, "SL"),
             ("take_profit_market", tp_price, "TP"),
         ]:
             try:
                 o = self._exchange.create_order(
                     symbol = PERP_SYMBOL,
-                    type   = order_type,
+                    type   = o_type,
                     side   = close_side,
                     amount = position_size,
                     params = {
