@@ -29,17 +29,6 @@ logger = logging.getLogger(__name__)
 
 PERP_SYMBOL = settings.SYMBOL + ":USDT"
 
-TESTNET_URLS = {
-    "binance": {
-        "public":  "https://testnet.binancefuture.com",
-        "private": "https://testnet.binancefuture.com",
-    },
-    "bybit": {
-        "public":  "https://api-testnet.bybit.com",
-        "private": "https://api-testnet.bybit.com",
-    },
-}
-
 
 class ExecutorError(Exception):
     pass
@@ -123,15 +112,14 @@ class TradeExecutor:
                 },
             }
 
+           self._exchange = exchange_cls(config)
+
             if self._testnet:
-                urls = TESTNET_URLS.get(self._exchange_name)
-                if urls:
-                    config["urls"] = {"api": urls}
+                self._exchange.set_sandbox_mode(True)
                 logger.info(f"Connecting to {self._exchange_name.upper()} TESTNET")
             else:
                 logger.info(f"Connecting to {self._exchange_name.upper()} MAINNET")
 
-            self._exchange = exchange_cls(config)
             self._exchange.load_markets()
 
             if self._exchange_name == "binance":
