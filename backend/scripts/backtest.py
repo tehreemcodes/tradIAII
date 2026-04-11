@@ -102,7 +102,7 @@ def _simulate(
         apply_fees       = apply_fees,
     )
     signals  = df[df["signal"].isin([0, 2])].copy()
-    filtered = traded = halted = 0
+    ml_filtered = gate_filtered = traded = halted = 0
 
     for ts, row in signals.iterrows():
         allowed, reason = rm.can_trade(ts)
@@ -110,6 +110,8 @@ def _simulate(
             if reason in ("max drawdown", "system halted"):
                 halted += 1
             continue
+
+        direction = "BUY" if row["signal"] == 2 else "SELL"
 
         # ML confidence filter
         if model is not None:
@@ -120,10 +122,8 @@ def _simulate(
             )
             prob = float(model.predict_proba(x)[0][1])
             if prob < MIN_CONFIDENCE:
-                filtered += 1
+                ml_filtered += 1
                 continue
-
-        direction = "BUY" if row["signal"] == 2 else "SELL"
 
         # Apply slippage to entry price
         raw_entry     = float(row["close"])
@@ -156,7 +156,7 @@ def _simulate(
 
     if label:
         logger.info(
-            f"[{label}] Filtered: {filtered} | Traded: {traded} | "
+            f"[{label}] Gate Filtered: {gate_filtered} | ML Filtered: {ml_filtered} | Traded: {traded} | "
             f"Halted: {halted} | Slippage/side: {SLIPPAGE_PCT*100:.3f}%"
         )
     return rm
@@ -335,6 +335,12 @@ def _print_report(
     print("\n" + "=" * 60)
     print("  BACKTEST RESULTS  (1% risk, fees + slippage included)")
     print("=" * 60)
+
+    if "error" in summary:
+        print(f"  {summary['error']}")
+        print("=" * 60)
+        return
+
     print(f"  Initial Capital   : ${summary['initial_capital']:>12,.2f}")
     print(f"  Final Capital     : ${summary['final_capital']:>12,.2f}")
     print(f"  Net PnL           : ${summary['net_pnl']:>+12,.2f}  ({summary['net_pnl_pct']:+.1f}%)")

@@ -236,6 +236,37 @@ export default function SignalCard({ capital = 10000, timeframe = '1h' }: { capi
                 })
               }
             </div>
+
+            {/* Strategy + Regime badges */}
+            <div className="flex items-center gap-2 mt-2">
+              {(signal as any).strategy_type && (signal as any).strategy_type !== 'none' && (
+                <span
+                  className="text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider"
+                  style={{
+                    background: (signal as any).strategy_type === 'scalp'
+                      ? 'rgba(245,158,11,0.15)' : 'rgba(34,211,238,0.15)',
+                    color: (signal as any).strategy_type === 'scalp'
+                      ? '#f59e0b' : '#22d3ee',
+                    border: `1px solid ${(signal as any).strategy_type === 'scalp'
+                      ? 'rgba(245,158,11,0.3)' : 'rgba(34,211,238,0.3)'}`,
+                  }}
+                >
+                  {(signal as any).strategy_type === 'scalp' ? '⚡ SCALP 1R' : '📈 TREND 2R'}
+                </span>
+              )}
+              {(signal as any).regime && (signal as any).regime !== 'UNKNOWN' && (
+                <span
+                  className="text-[9px] font-semibold px-2 py-0.5 rounded-full"
+                  style={{
+                    background: 'rgba(255,255,255,0.05)',
+                    color: 'rgba(255,255,255,0.4)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                  }}
+                >
+                  {((signal as any).regime as string).replace('_', ' ')}
+                </span>
+              )}
+            </div>
           </div>
           <ConfidenceArc value={signal.confidence * 100} color={color} />
         </div>

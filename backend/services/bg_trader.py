@@ -10,6 +10,7 @@ from backend.scripts.live_predict import get_live_signal
 from backend.services.trade_tracker import TradeTracker
 from backend.api.exchange_routes import _active_sessions
 from backend.services.trade_executor import ExecutorError
+from backend.services.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ async def start_bg_trader():
             if not active_enabled_sessions:
                 logger.debug("[BG_TRADER] No active auto-trading sessions. Skipping checks.")
             else:
-                # ── Step 1: Manage Open Trades ────────────────────────────────
+                # ── Step 1: Manage Open Trades + Breakeven ───────────────
                 if tracker.has_open_trade():
                     open_trades = tracker.get_open_trades()
                     for sid, session_data in active_enabled_sessions.items():
@@ -71,7 +72,47 @@ async def start_bg_trader():
                         
                         try:
                             exchange_positions = executor.get_open_positions()
+
+                            # ── Breakeven management ────────────────────
+                            if exchange_positions:
+                                for trade in open_trades:
+                                    if trade.get("exchange") != executor._exchange_name:
+                                        continue
+                                    if trade.get("be_moved", False):
+                                        continue  # already at breakeven
+
+                                    be_thresh = trade.get("be_threshold", 0.5)
+                                    entry = trade.get("entry_price", 0)
+                                    sl_dist = abs(entry - trade.get("sl_price", entry))
+                                    direction = trade.get("direction", "BUY")
+
+                                    if sl_dist > 0 and entry > 0:
+                                        # Get current mark price
+                                        for pos in exchange_positions:
+                                            mark = float(pos.get("markPrice", 0))
+                                            if mark <= 0:
+                                                continue
+                                            if direction == "BUY":
+                                                unrealized_r = (mark - entry) / sl_dist
+                                            else:
+                                                unrealized_r = (entry - mark) / sl_dist
+
+                                            if unrealized_r >= be_thresh:
+                                                try:
+                                                    executor.modify_sl(entry, direction, trade.get("size", 0))
+                                                    trade["be_moved"] = True
+                                                    trade["original_sl"] = trade["sl_price"]
+                                                    trade["sl_price"] = entry
+                                                    logger.info(
+                                                        f"[BG_TRADER] BE moved for {trade['id']} "
+                                                        f"({trade.get('strategy_type', 'legacy')}): "
+                                                        f"SL → {entry:,.2f} at {unrealized_r:.2f}R"
+                                                    )
+                                                except Exception as e:
+                                                    logger.warning(f"[BG_TRADER] BE move failed: {e}")
+
                             if not exchange_positions:
+                                # Position closed — check PnL records
                                 closed_records = executor.get_closed_pnl(limit=5)
                                 for trade in open_trades:
                                     if trade.get("exchange") == executor._exchange_name:
@@ -115,12 +156,18 @@ async def start_bg_trader():
                                     logger.warning(f"[BG_TRADER] Session {sid[:8]} has 0 balance. Skipping.")
                                     continue
 
-                                # Recalculate position size using user's real balance
-                                # Re-import RiskManager here to avoid circular imports if needed, but we can do it directly
-                                from backend.services.risk_manager import RiskManager
-                                rm = RiskManager(initial_capital=user_balance, risk_pct=risk_pct, compound=True)
+                                # Get strategy-specific parameters from signal
+                                strategy_type = signal.get("strategy_type", "legacy")
+                                risk_pct = signal.get("risk_pct", session_data.get("risk_pct", 0.01))
+                                rr = float(signal.get("rr", "1:2").split(":")[-1])
+                                be_threshold = signal.get("be_threshold", 0.5)
+
+                                rm = RiskManager(
+                                    initial_capital=user_balance,
+                                    risk_pct=risk_pct,
+                                    compound=True,
+                                )
                                 
-                                # Convert TS strings back to pd.Timestamp for RiskManager
                                 import pandas as pd
                                 ts_obj = pd.Timestamp(candle_ts) if candle_ts else pd.Timestamp(now)
                                 
@@ -128,11 +175,19 @@ async def start_bg_trader():
                                     entry=signal["entry"],
                                     sl=signal["sl"],
                                     direction=signal["signal"],
-                                    ts=ts_obj
+                                    ts=ts_obj,
+                                    strategy_type=strategy_type,
+                                    rr_override=rr,
+                                    risk_pct_override=risk_pct,
+                                    be_threshold=be_threshold,
                                 )
                                 
                                 if trade and trade.position_size > 0:
-                                    logger.info(f"[BG_TRADER] Placing {trade.direction} for session {sid[:8]} | size={trade.position_size:.6f}")
+                                    logger.info(
+                                        f"[BG_TRADER] Placing {trade.direction} "
+                                        f"({strategy_type}) for session {sid[:8]} | "
+                                        f"size={trade.position_size:.6f}"
+                                    )
                                     order = executor.place_order(
                                         direction     = trade.direction,
                                         position_size = trade.position_size,
@@ -140,8 +195,11 @@ async def start_bg_trader():
                                         sl_price      = trade.sl,
                                         tp_price      = trade.tp,
                                         signal_ts     = candle_ts,
+                                        strategy_type = strategy_type,
                                     )
                                     if order:
+                                        order["be_threshold"] = be_threshold
+                                        order["strategy_type"] = strategy_type
                                         tracker.open_trade(order)
                             except ExecutorError as e:
                                 logger.error(f"[BG_TRADER] Order failed for session {sid[:8]}: {e}")

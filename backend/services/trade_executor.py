@@ -1,25 +1,25 @@
 """
-Trade Executor — Dynamic Credentials
-======================================
-Updated to accept API credentials dynamically per request
-instead of reading from environment variables at startup.
+Trade Executor \u2014 Native Binance Futures API
+=============================================
+Replaces CCXT with native REST endpoints for robust execution.
+Supports both fapi.binance.com (Mainnet) and demo-fapi.binance.com (Testnet).
 
-This allows multiple users to connect their own exchange accounts
-through the dashboard without restarting the server.
-
-Usage:
-    # With dynamic credentials (from ConnectExchange flow):
-    executor = TradeExecutor(api_key="xxx", api_secret="yyy",
-                             exchange="binance", testnet=False)
-    executor.connect()
-
-    # Legacy mode (reads from settings/env — paper trading default):
-    executor = TradeExecutor()
-    executor.connect()   # LIVE_TRADING_ENABLED=False → paper mode
+Key Production Features:
+- Idempotency via newClientOrderId
+- Automatic serverTime synchronization to prevent -1021 timestamp drift
+- Dynamic Partial Fill handling via executedQty
+- Safe Error handling and timeout recovery
 """
-import ccxt
 import logging
 import time
+import hmac
+import hashlib
+import uuid
+import requests
+from requests.adapters import HTTPAdapter
+from requests.exceptions import Timeout, RequestException
+from urllib3.util.retry import Retry
+from urllib.parse import urlencode
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -33,277 +33,283 @@ PERP_SYMBOL = settings.SYMBOL + ":USDT"
 class ExecutorError(Exception):
     pass
 
-
-class TradeExecutor:
-
+class BinanceFuturesExecutor:
     def __init__(
         self,
         api_key:    Optional[str]  = None,
         api_secret: Optional[str]  = None,
-        exchange:   Optional[str]  = None,
+        exchange:   Optional[str]  = None, # Kept for API signature compatibility, ignored
         testnet:    Optional[bool] = None,
         leverage:   Optional[int]  = None,
     ):
-        """
-        Initialise executor.
-
-        If api_key/api_secret are provided, they take priority over
-        environment variables. This is the dynamic credentials path
-        used when a user connects their account via the dashboard.
-
-        If not provided, falls back to EXCHANGE_API_KEY/SECRET from
-        settings (legacy env-var path, used for paper trading).
-        """
-        # Credential resolution: dynamic > env var
         self._api_key       = api_key    or settings.EXCHANGE_API_KEY    or ""
         self._api_secret    = api_secret or settings.EXCHANGE_API_SECRET or ""
-        self._exchange_name = (exchange  or settings.EXCHANGE).lower()
         self._testnet       = testnet if testnet is not None else settings.EXCHANGE_TESTNET
         self._leverage      = leverage if leverage is not None else settings.DEFAULT_LEVERAGE
 
-        self._exchange:  Optional[ccxt.Exchange] = None
         self._connected: bool = False
-
-        # Track whether this instance uses dynamic or env credentials
         self._dynamic = bool(api_key and api_secret)
+        self._time_offset = 0
+
+        if self._testnet:
+            self.base_url = "https://demo-fapi.binance.com"
+        else:
+            self.base_url = "https://fapi.binance.com"
+
+        self.symbol = settings.SYMBOL.replace("/", "")
+
+        self.session = requests.Session()
+        retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 503, 500, 502, 504])
+        self.session.mount('https://', HTTPAdapter(max_retries=retries))
 
     @property
     def paper_mode(self) -> bool:
-        """True if paper trading is enabled via env vars and NO dynamic creds are provided."""
         return settings.PAPER_MODE and not self._dynamic
 
-    # ── Connection ────────────────────────────────────────────────────────────
+    # \u2500\u2500 Authentication & Requests \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _sync_time(self):
+        try:
+            res = self._request("GET", "/fapi/v1/time", signed=False)
+            server_time = res["serverTime"]
+            local_time = int(time.time() * 1000)
+            self._time_offset = server_time - local_time
+            logger.info(f"Server time synced. Offset: {self._time_offset}ms")
+        except Exception as e:
+            logger.warning(f"Could not sync server time: {e}")
+
+    def _get_timestamp(self):
+        return int(time.time() * 1000) + self._time_offset
+
+    def _sign(self, query_string: str) -> str:
+        return hmac.new(
+            self._api_secret.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+    def _request(self, method: str, endpoint: str, params: dict = None, signed: bool = True, timeout: int = 10):
+        url = self.base_url + endpoint
+        params = params or {}
+
+        if signed:
+            params['timestamp'] = self._get_timestamp()
+            params['recvWindow'] = 10000
+            query_string = urlencode(params)
+            signature = self._sign(query_string)
+            query_string += f"&signature={signature}"
+            full_url = f"{url}?{query_string}"
+            headers = {"X-MBX-APIKEY": self._api_key}
+        else:
+            query_string = urlencode(params)
+            full_url = f"{url}?{query_string}" if query_string else url
+            headers = {}
+
+        try:
+            if method == "GET":
+                response = self.session.get(full_url, headers=headers, timeout=timeout)
+            elif method == "POST":
+                response = self.session.post(full_url, headers=headers, timeout=timeout)
+            elif method == "DELETE":
+                response = self.session.delete(full_url, headers=headers, timeout=timeout)
+            elif method == "PUT":
+                response = self.session.put(full_url, headers=headers, timeout=timeout)
+            else:
+                raise ValueError(f"Unsupported method: {method}")
+
+            data = response.json()
+            if response.status_code != 200:
+                code = data.get('code')
+                msg = data.get('msg')
+                raise ExecutorError(f"API Error [{code}]: {msg}")
+            return data
+        except ExecutorError:
+            raise
+        except Timeout:
+            raise Timeout("Request timed out")
+        except Exception as e:
+            raise ExecutorError(f"HTTP Request failed: {e}")
+
+    # \u2500\u2500 Connection \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     def connect(self) -> bool:
-        """
-        Connect and verify exchange credentials.
-
-        For paper trading (PAPER_MODE=True and no dynamic creds):
-            Returns False immediately — no exchange connection needed.
-
-        For live trading (dynamic creds provided OR PAPER_MODE=False):
-            Attempts real exchange connection and verifies by fetching balance.
-        """
-        # Paper mode: no dynamic creds and paper mode enabled
         if self.paper_mode:
-            logger.info("TradeExecutor: paper mode — no exchange connection.")
+            logger.info("BinanceFuturesExecutor: paper mode \u2014 no exchange connection.")
             return False
 
         if not self._api_key or not self._api_secret:
-            logger.error(
-                "TradeExecutor: no API credentials. "
-                "Provide api_key/api_secret or set env vars."
-            )
+            logger.error("BinanceFuturesExecutor: no API credentials provided.")
             return False
 
         try:
-            exchange_cls = getattr(ccxt, self._exchange_name, None)
-            if not exchange_cls:
-                logger.error(f"Unknown exchange: {self._exchange_name}")
-                return False
-
-            config = {
-                "apiKey":          self._api_key,
-                "secret":          self._api_secret,
-                "enableRateLimit": True,
-                "options": {
-                    "defaultType": "future",
-                    "recvWindow":  10000,    # ← add this — allows 10s clock drift
-                },
-            }
-
-           self._exchange = exchange_cls(config)
-
-            if self._testnet:
-                self._exchange.set_sandbox_mode(True)
-                logger.info(f"Connecting to {self._exchange_name.upper()} TESTNET")
-            else:
-                logger.info(f"Connecting to {self._exchange_name.upper()} MAINNET")
-
-            self._exchange.load_markets()
-
-            if self._exchange_name == "binance":
-                self._ensure_one_way_mode()
-
-            balance = self._exchange.fetch_balance()
-            usdt    = float(balance.get("USDT", {}).get("free", 0))
+            self._sync_time()
+            self._ensure_one_way_mode()
+            self._set_leverage()
 
             logger.info(
-                f"Connected: {self._exchange_name.upper()} "
-                f"({'TESTNET' if self._testnet else 'MAINNET'}) "
-                f"USDT={usdt:,.2f}"
+                f"Connected to Binance Futures "
+                f"({'TESTNET' if self._testnet else 'MAINNET'})"
             )
+
             self._connected = True
             return True
-
-        except ccxt.AuthenticationError as e:
-            logger.error(f"Authentication failed: {e}")
-            return False
         except Exception as e:
             logger.error(f"Connection failed: {e}")
             return False
 
-    def _ensure_one_way_mode(self) -> None:
+    def _ensure_one_way_mode(self):
         try:
-            resp     = self._exchange.fapiPrivateGetPositionSideDual()
-            is_hedge = resp.get("dualSidePosition", False)
-            if is_hedge:
-                self._exchange.fapiPrivatePostPositionSideDual(
-                    {"dualSidePosition": "false"}
-                )
+            res = self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
+            is_dual = res.get("dualSidePosition", False)
+            if is_dual:
+                self._request("POST", "/fapi/v1/positionSide/dual", {"dualSidePosition": "false"}, signed=True)
                 logger.info("Binance: switched to one-way mode.")
         except Exception as e:
-            logger.warning(f"Could not check Binance position mode: {e}")
+            logger.warning(f"Could not enforce one-way mode: {e}")
+
+    def _set_leverage(self):
+        try:
+            self._request("POST", "/fapi/v1/leverage", {
+                "symbol": self.symbol,
+                "leverage": self._leverage
+            }, signed=True)
+            logger.info(f"Set leverage to {self._leverage}x for {self.symbol}")
+        except Exception as e:
+            logger.warning(f"Failed to set leverage: {e}")
 
     @property
     def connected(self) -> bool:
-        return self._connected and self._exchange is not None
+        return self._connected
 
     @property
     def is_binance(self) -> bool:
-        return self._exchange_name == "binance"
-        
-    def get_account_info(self) -> dict:
-        """
-        Fetch balance, leverage, margin mode, and open positions.
-        Used for the dashboard exchange panel.
-        """
-        if not self._connected or not self._exchange:
-            return {
-                "balance": 0.0,
-                "leverage": 1,
-                "margin_mode": "cross",
-                "open_positions": 0
-            }
-
-        try:
-            balance = self._exchange.fetch_balance()
-            usdt_balance = balance.get("USDT", {}).get("total", 0.0)
-
-            positions = self._exchange.fetch_positions([PERP_SYMBOL]) if self._exchange.has.get("fetchPositions") else []
-            active_positions = len([p for p in positions if float(p.get("info", {}).get("positionAmt", 0)) != 0])
-            
-            # Extract basic leverage/margin defaults; exchanges vary drastically
-            leverage = 1
-            margin_mode = "cross"
-            
-            if positions and len(positions) > 0:
-                pos = positions[0]
-                leverage = pos.get("leverage") or pos.get("info", {}).get("leverage") or 1
-                margin_mode = "isolated" if pos.get("isolated") or pos.get("info", {}).get("isolated") else "cross"
-                
-            return {
-                "balance": float(usdt_balance),
-                "leverage": int(leverage),
-                "margin_mode": str(margin_mode).lower(),
-                "open_positions": active_positions
-            }
-        except Exception as e:
-            logger.error(f"Failed to fetch account info: {e}")
-            return {
-                "balance": 0.0,
-                "leverage": 1,
-                "margin_mode": "cross",
-                "open_positions": 0
-            }
+        return True
 
     @property
     def is_bybit(self) -> bool:
-        return self._exchange_name == "bybit"
+        return False
 
-    # ── Account ───────────────────────────────────────────────────────────────
+    # \u2500\u2500 Account Info \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     def get_balance(self) -> float:
-        if not self.connected:
+        if not self.connected and not self.paper_mode:
             return 0.0
+        if self.paper_mode:
+            return settings.INITIAL_CAPITAL
         try:
-            bal = self._exchange.fetch_balance()
-            return float(bal.get("USDT", {}).get("free", 0))
+            res = self._request("GET", "/fapi/v2/balance", signed=True)
+            for asset in res:
+                if asset["asset"] == "USDT":
+                    return float(asset["availableBalance"])
+            return 0.0
         except Exception as e:
             logger.error(f"get_balance failed: {e}")
             return 0.0
+
+    def get_account_info(self) -> dict:
+        if not self.connected:
+            return {"balance": 0.0, "leverage": 1, "margin_mode": "cross", "open_positions": 0}
+        
+        try:
+            bal_res = self._request("GET", "/fapi/v2/account", signed=True)
+            usdt_total = float(bal_res.get("totalWalletBalance", 0.0))
+
+            pos_res = self._request("GET", "/fapi/v2/positionRisk", {"symbol": self.symbol}, signed=True)
+            active_positions = 0
+            leverage = self._leverage
+            margin_mode = "cross"
+
+            if pos_res and len(pos_res) > 0:
+                pos = pos_res[0]
+                if float(pos.get("positionAmt", 0)) != 0:
+                    active_positions = 1
+                leverage = int(pos.get("leverage", leverage))
+                margin_mode = "isolated" if pos.get("marginType") == "isolated" else "cross"
+            
+            return {
+                "balance": usdt_total,
+                "leverage": leverage,
+                "margin_mode": margin_mode,
+                "open_positions": active_positions
+            }
+        except Exception as e:
+            logger.error(f"get_account_info failed: {e}")
+            return {"balance": 0.0, "leverage": 1, "margin_mode": "cross", "open_positions": 0}
 
     def get_open_positions(self) -> list[dict]:
         if not self.connected:
             return []
         try:
-            positions = self._exchange.fetch_positions([PERP_SYMBOL])
-            result    = []
-            for p in positions:
-                size = float(p.get("contracts", 0) or 0)
-                if size > 0:
+            pos_res = self._request("GET", "/fapi/v2/positionRisk", {"symbol": self.symbol}, signed=True)
+            result = []
+            for p in pos_res:
+                amt = float(p.get("positionAmt", 0))
+                if amt != 0:
+                    side = "long" if amt > 0 else "short"
                     result.append({
-                        "symbol":            p.get("symbol"),
-                        "side":              p.get("side"),
-                        "size":              size,
-                        "entry_price":       float(p.get("entryPrice",      0) or 0),
-                        "mark_price":        float(p.get("markPrice",       0) or 0),
-                        "unrealised_pnl":    float(p.get("unrealizedPnl",   0) or 0),
-                        "percentage":        float(p.get("percentage",      0) or 0),
-                        "liquidation_price": float(p.get("liquidationPrice",0) or 0),
-                        "leverage":          float(p.get("leverage",        1) or 1),
+                        "symbol": getattr(settings, 'SYMBOL', p.get("symbol")),
+                        "side": side,
+                        "size": abs(amt),
+                        "entry_price": float(p.get("entryPrice", 0)),
+                        "mark_price": float(p.get("markPrice", 0)),
+                        "unrealised_pnl": float(p.get("unRealizedProfit", 0)),
+                        "liquidation_price": float(p.get("liquidationPrice", 0)),
+                        "leverage": float(p.get("leverage", 1))
                     })
             return result
         except Exception as e:
             logger.error(f"get_open_positions failed: {e}")
             return []
 
-    # ── Pre-Order Margin Validation ──────────────────────────────────────────
+    # \u2500\u2500 Order Execution \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
-    def _validate_margin(
-        self, position_size: float, entry_price: float, side: str
-    ) -> float:
-        """
-        Validate that the position fits within available margin.
-
-        If required_margin > available_balance, scale down position_size
-        so it fits (with a 5% safety buffer).  Returns the (possibly
-        reduced) position_size, or 0.0 if even the minimum trade is
-        impossible.
-        """
-        MIN_NOTIONAL = 5.0   # Binance Futures minimum notional (USD)
-        MARGIN_BUFFER = 0.95  # use at most 95% of available balance
+    def _validate_margin(self, position_size: float, entry_price: float) -> float:
+        MIN_NOTIONAL = 5.0
+        MARGIN_BUFFER = 0.95
 
         try:
             available = self.get_balance()
-        except Exception as e:
-            logger.error(f"_validate_margin: could not fetch balance: {e}")
-            return position_size   # proceed optimistically
+        except:
+            return position_size
 
-        notional        = position_size * entry_price
+        notional = position_size * entry_price
         required_margin = notional / self._leverage
 
-        logger.info(
-            f"[MARGIN CHECK] size={position_size:.6f} | "
-            f"notional=${notional:,.2f} | leverage={self._leverage}x | "
-            f"required_margin=${required_margin:,.2f} | "
-            f"available=${available:,.2f}"
-        )
-
         if required_margin <= available * MARGIN_BUFFER:
-            return position_size   # fits fine
+            return position_size
 
-        # Scale down to fit within available margin
-        max_notional      = available * MARGIN_BUFFER * self._leverage
-        adjusted_size     = max_notional / entry_price
+        max_notional = available * MARGIN_BUFFER * self._leverage
+        adjusted_size = max_notional / entry_price
 
         adjusted_notional = adjusted_size * entry_price
         if adjusted_notional < MIN_NOTIONAL:
-            logger.error(
-                f"[MARGIN CHECK] Scaled-down notional ${adjusted_notional:,.2f} "
-                f"is below Binance minimum ${MIN_NOTIONAL}. Trade impossible."
-            )
             return 0.0
+        return round(adjusted_size, 3)
 
-        logger.warning(
-            f"[MARGIN CHECK] Position scaled down: "
-            f"{position_size:.6f} → {adjusted_size:.6f} "
-            f"(notional ${notional:,.2f} → ${adjusted_notional:,.2f}) "
-            f"to fit available margin ${available:,.2f}"
-        )
-        return adjusted_size
-
-    # ── Order Placement ───────────────────────────────────────────────────────
+    def _safe_place_entry_order(self, params: dict):
+        """Places entry order with 1-time timeout retry checking newClientOrderId"""
+        client_id = params['newClientOrderId']
+        
+        try:
+            return self._request("POST", "/fapi/v1/order", params, signed=True)
+        except Timeout:
+            logger.warning(f"Timeout placing entry order. Checking if {client_id} resolved...")
+            try:
+                # Query order status using client ID
+                order_status = self._request("GET", "/fapi/v1/order", {
+                    "symbol": self.symbol,
+                    "origClientOrderId": client_id
+                }, signed=True)
+                
+                logger.info(f"Order found on query: {order_status.get('status')} - DO NOT RETRY.")
+                return order_status
+            except ExecutorError as e:
+                if "Code -2013" in str(e) or "doesn't exist" in str(e).lower():
+                    # Order does NOT exist. We can safely retry once
+                    logger.warning("Order not found on Binance. Retrying once...")
+                    return self._request("POST", "/fapi/v1/order", params, signed=True)
+                else:
+                    raise ExecutorError(f"Verification failed: {e}")
 
     def place_order(
         self,
@@ -313,223 +319,195 @@ class TradeExecutor:
         sl_price:      float,
         tp_price:      float,
         signal_ts:     str,
+        strategy_type: str = "legacy",
     ) -> Optional[dict]:
-        side = "buy" if direction == "BUY" else "sell"
+        side = "BUY" if direction.upper() == "BUY" else "SELL"
+        close_side = "SELL" if side == "BUY" else "BUY"
 
-        # Paper mode
         if self.paper_mode:
-            logger.info(
-                f"[PAPER] {direction} {position_size:.6f} {settings.SYMBOL} "
-                f"entry~{entry_price:,.2f} SL={sl_price:,.2f} TP={tp_price:,.2f}"
-            )
+            logger.info(f"[PAPER] {direction} {position_size:.6f} {settings.SYMBOL} entry~{entry_price:,.2f}")
             return {
-                "id":          f"paper_{int(time.time())}",
-                "status":      "open",
-                "paper":       True,
-                "direction":   direction,
-                "symbol":      settings.SYMBOL,
-                "size":        position_size,
+                "id": f"paper_{int(time.time())}",
+                "status": "open",
+                "paper": True,
+                "direction": direction,
+                "symbol": settings.SYMBOL,
+                "size": position_size,
                 "entry_price": entry_price,
-                "sl_price":    sl_price,
-                "tp_price":    tp_price,
-                "signal_ts":   signal_ts,
-                "opened_at":   datetime.now(timezone.utc).isoformat(),
-                "exchange":    self._exchange_name,
+                "sl_price": sl_price,
+                "tp_price": tp_price,
+                "signal_ts": signal_ts,
+                "opened_at": datetime.now(timezone.utc).isoformat(),
+                "exchange": "binance",
+                "order_type": settings.ORDER_TYPE,
+                "strategy_type": strategy_type,
             }
 
         if not self.connected:
-            raise ExecutorError("Exchange not connected.")
+            raise ExecutorError("Not connected.")
 
-        # ── Set leverage (configurable, default 20x) ─────────────────────────
-        try:
-            self._exchange.set_leverage(self._leverage, PERP_SYMBOL)
-            logger.info(f"Setting leverage to {self._leverage}x for {PERP_SYMBOL}")
-        except Exception as e:
-            logger.warning(f"Could not set leverage to {self._leverage}x: {e}")
-
-        # ── Pre-order margin validation & auto scale-down ────────────────────
-        position_size = self._validate_margin(
-            position_size, entry_price, side
-        )
+        position_size = self._validate_margin(position_size, entry_price)
         if position_size <= 0:
-            raise ExecutorError(
-                f"Position size too small after margin validation. "
-                f"Balance may be insufficient for minimum trade."
-            )
+            raise ExecutorError("Position size too small after margin validation.")
 
+        # \u2500\u2500 1. Entry Order \u2500\u2500
+        order_type = settings.ORDER_TYPE.upper()
+        # Strategy metadata in clientOrderId for explainability
+        strat_prefix = strategy_type[:5] if strategy_type else "legcy"
+        unique_client_id = f"tradia_{strat_prefix}_{uuid.uuid4().hex[:10]}"
+        
+        params = {
+            "symbol": self.symbol,
+            "side": side,
+            "type": order_type,
+            "quantity": round(position_size, 3),
+            "positionSide": "BOTH",
+            "newClientOrderId": unique_client_id
+        }
+        
+        if order_type == "LIMIT":
+            params["timeInForce"] = "GTC"
+            offset = 1.0001 if side == "BUY" else 0.9999
+            params["price"] = round(entry_price * offset, 2)
+        
         try:
-            if self.is_binance:
-                order = self._place_binance_order(
-                    side, position_size, entry_price, sl_price, tp_price
-                )
-            else:
-                order = self._place_bybit_order(
-                    side, position_size, sl_price, tp_price
-                )
+            entry_res = self._safe_place_entry_order(params)
+            logger.info(f"Entry {order_type} resolved: {entry_res.get('orderId')} status={entry_res.get('status')}")
+        except Exception as e:
+            raise ExecutorError(f"Entry Order failed completely: {e}")
 
-            filled_price = float(order.get("average") or order.get("price") or entry_price)
-            logger.info(
-                f"[LIVE] Order ({settings.ORDER_TYPE}): id={order['id']} "
-                f"price={filled_price:,.2f}"
-            )
+        # \u2500\u2500 2. Determine SL/TP Size (Partial Fills Handling) \u2500\u2500
+        # If it's a Limit order and fills partially, we only place SL/TP for executed amount
+        # If executedQty is zero (just placed in book), we fall back to requested size, 
+        # or we just use Binance closePosition=True to avoid size explicitly!
+        
+        try:
+            executed_qty = float(entry_res.get("executedQty", 0))
+            if executed_qty > 0:
+                sltp_size = executed_qty
+                logger.info(f"Using executedQty: {sltp_size} for conditional orders.")
+            else:
+                sltp_size = round(position_size, 3)
+                logger.info(f"Order resting or no executedQty. Using requested size: {sltp_size}")
+
+            # 3. Stop Loss
+            self._request("POST", "/fapi/v1/order", {
+                "symbol": self.symbol,
+                "side": close_side,
+                "type": "STOP_MARKET",
+                "quantity": sltp_size,
+                "stopPrice": round(sl_price, 2),
+                "reduceOnly": "true",
+                "workingType": "MARK_PRICE"
+            }, signed=True)
+            logger.info(f"SL placed at {sl_price}")
+
+            # 4. Take Profit
+            self._request("POST", "/fapi/v1/order", {
+                "symbol": self.symbol,
+                "side": close_side,
+                "type": "TAKE_PROFIT_MARKET",
+                "quantity": sltp_size,
+                "stopPrice": round(tp_price, 2),
+                "reduceOnly": "true",
+                "workingType": "MARK_PRICE"
+            }, signed=True)
+            logger.info(f"TP placed at {tp_price}")
 
             return {
-                "id":          order["id"],
-                "status":      "open",
-                "paper":       False,
-                "direction":   direction,
-                "symbol":      settings.SYMBOL,
-                "size":        position_size,
-                "entry_price": filled_price,
-                "sl_price":    sl_price,
-                "tp_price":    tp_price,
-                "signal_ts":   signal_ts,
-                "opened_at":   datetime.now(timezone.utc).isoformat(),
-                "exchange":    self._exchange_name,
-                "order_type":  settings.ORDER_TYPE,
+                "id": str(entry_res.get("orderId")),
+                "status": "open",
+                "paper": False,
+                "direction": direction,
+                "symbol": settings.SYMBOL,
+                "size": float(sltp_size),
+                "entry_price": float(entry_res.get("avgPrice") or entry_res.get("price") or entry_price),
+                "sl_price": sl_price,
+                "tp_price": tp_price,
+                "signal_ts": signal_ts,
+                "opened_at": datetime.now(timezone.utc).isoformat(),
+                "exchange": "binance",
+                "order_type": settings.ORDER_TYPE,
+                "strategy_type": strategy_type,
             }
 
-        except ccxt.InsufficientFunds as e:
-            raise ExecutorError(f"Insufficient funds: {e}") from e
-        except ccxt.InvalidOrder as e:
-            raise ExecutorError(f"Invalid order: {e}") from e
         except Exception as e:
-            raise ExecutorError(f"Order failed: {e}") from e
+            logger.error(f"Failed to place SL/TP conditionally! {e}")
+            # Emergency fallback: we have a position but SL hit an error. We should leave it open for now
+            # but log critically or attempt to close depending on risk model. We'll raise it so live_trader logs it.
+            raise ExecutorError(f"SL/TP Placement failed: {e}")
 
-    def _place_binance_order(
-        self, side, position_size, entry_price, sl_price, tp_price
-    ) -> dict:
-        close_side  = "sell" if side == "buy" else "buy"
-        order_type  = settings.ORDER_TYPE.lower()
-        
-        # Apply slight offset to limit price to improve fill chance (0.01%)
-        # If BUY: slightly higher, if SELL: slightly lower than structural entry
-        offset = 1.0001 if side == "buy" else 0.9999
-        limit_price = round(entry_price * offset, 2)
-
-        params = {"positionSide": "BOTH"}
-        if order_type == "limit":
-            params["timeInForce"] = "GTC"
-
-        entry_order = self._exchange.create_order(
-            symbol = PERP_SYMBOL,
-            type   = order_type,
-            side   = side,
-            amount = position_size,
-            price  = limit_price if order_type == "limit" else None,
-            params = params,
-        )
-        logger.info(f"Binance entry ({order_type}): {entry_order['id']} @ {limit_price if order_type == 'limit' else 'MARKET'}")
-
-        for o_type, price, label in [
-            ("stop_market",        sl_price, "SL"),
-            ("take_profit_market", tp_price, "TP"),
-        ]:
-            try:
-                o = self._exchange.create_order(
-                    symbol = PERP_SYMBOL,
-                    type   = o_type,
-                    side   = close_side,
-                    amount = position_size,
-                    params = {
-                        "stopPrice":    price,
-                        "reduceOnly":   True,
-                        "positionSide": "BOTH",
-                        "workingType":  "MARK_PRICE",
-                    },
-                )
-                logger.info(f"Binance {label}: {o['id']} @ {price}")
-            except Exception as e:
-                logger.error(f"Binance {label} order failed: {e}")
-
-        return entry_order
-
-    def _place_bybit_order(
-        self, side, position_size, sl_price, tp_price
-    ) -> dict:
-        return self._exchange.create_order(
-            symbol = PERP_SYMBOL,
-            type   = "market",
-            side   = side,
-            amount = position_size,
-            params = {
-                "stopLoss":    {"triggerPrice": sl_price,  "type": "market"},
-                "takeProfit":  {"triggerPrice": tp_price,  "type": "market"},
-                "positionIdx": 0,
-            },
-        )
-
-    def close_position(
-        self, direction: str, size: float, reason: str = "manual"
-    ) -> Optional[dict]:
+    def close_position(self, direction: str, size: float, reason: str = "manual") -> Optional[dict]:
         if self.paper_mode:
             return {"status": "closed", "paper": True, "reason": reason}
 
         if not self.connected:
             raise ExecutorError("Not connected.")
 
-        close_side = "sell" if direction == "BUY" else "buy"
+        close_side = "SELL" if direction.upper() == "BUY" else "BUY"
+        
         try:
-            if self.is_binance:
-                try:
-                    self._exchange.cancel_all_orders(PERP_SYMBOL)
-                except Exception:
-                    pass
-
-            order = self._exchange.create_order(
-                symbol = PERP_SYMBOL,
-                type   = "market",
-                side   = close_side,
-                amount = size,
-                params = {
-                    "reduceOnly":   True,
-                    "positionSide": "BOTH" if self.is_binance else None,
-                    "positionIdx":  0      if self.is_bybit   else None,
-                },
-            )
-            return {"status": "closed", "paper": False,
-                    "order_id": order["id"], "reason": reason}
+            self.cancel_all_conditional_orders()
+            res = self._request("POST", "/fapi/v1/order", {
+                "symbol": self.symbol,
+                "side": close_side,
+                "type": "MARKET",
+                "quantity": round(size, 3),
+                "reduceOnly": "true"
+            }, signed=True)
+            return {
+                "status": "closed", 
+                "paper": False, 
+                "order_id": str(res.get("orderId")), 
+                "reason": reason
+            }
         except Exception as e:
-            raise ExecutorError(f"Close failed: {e}") from e
+            raise ExecutorError(f"Close failed: {e}")
 
     def cancel_all_conditional_orders(self, symbol: Optional[str] = None) -> None:
-        """Cancel all open orders (SL/TP triggers) for the symbol."""
+        """
+        Only cancels STOP_MARKET and TAKE_PROFIT_MARKET orders.
+        Leaves rest limit/entry orders untouched.
+        """
         if self.paper_mode or not self.connected:
             return
-        
-        target = symbol or PERP_SYMBOL
-        # Support both 'BTCUSDT' or 'BTC/USDT:USDT' formats
-        if ":" not in target and self.is_binance:
-            target = target.replace("/", "") + ":USDT"
-
+        sym = symbol.replace("/", "").replace(":USDT", "") if symbol else self.symbol
         try:
-            if self.is_binance:
-                self._exchange.cancel_all_orders(target)
-                logger.info(f"Cancelled all conditional orders for {target}")
+            # Get open orders
+            orders = self._request("GET", "/fapi/v1/openOrders", {"symbol": sym}, signed=True)
+            
+            cancel_count = 0
+            for order in orders:
+                if order.get("type") in ["STOP_MARKET", "TAKE_PROFIT_MARKET"]:
+                    self._request("DELETE", "/fapi/v1/order", {
+                        "symbol": sym,
+                        "orderId": order["orderId"]
+                    }, signed=True)
+                    cancel_count += 1
+                    
+            logger.info(f"Cancelled {cancel_count} conditional SL/TP orders.")
         except Exception as e:
-            logger.warning(f"Failed to cancel conditional orders for {target}: {e}")
+            logger.warning(f"Failed to cleanly cancel conditional orders: {e}")
 
     def get_closed_pnl(self, limit: int = 50) -> list[dict]:
         if not self.connected:
             return []
         try:
-            records = self._exchange.fetch_my_trades(PERP_SYMBOL, limit=limit)
-            return [
-                {
-                    "order_id":  r.get("order"),
-                    "symbol":    r.get("symbol"),
-                    "side":      r.get("side"),
-                    "price":     float(r.get("price",  0)),
-                    "amount":    float(r.get("amount", 0)),
-                    "pnl":       float(r.get("info", {}).get(
-                                    "realizedPnl" if self.is_binance
-                                    else "closedPnl", 0)),
-                    "fee":       float(r.get("fee", {}).get("cost", 0)),
-                    "timestamp": r.get("timestamp"), # raw ms
-                    "datetime":  r.get("datetime"),  # ISO string
-                }
-                for r in records
-            ]
+            res = self._request("GET", "/fapi/v1/userTrades", {"symbol": self.symbol, "limit": limit}, signed=True)
+            result = []
+            for r in res:
+                result.append({
+                    "order_id": r.get("orderId"),
+                    "symbol": r.get("symbol"),
+                    "side": str(r.get("side")).lower(),
+                    "price": float(r.get("price", 0)),
+                    "amount": float(r.get("qty", 0)),
+                    "pnl": float(r.get("realizedPnl", 0)),
+                    "fee": float(r.get("commission", 0)),
+                    "timestamp": r.get("time"),
+                    "datetime": datetime.fromtimestamp(r.get("time", 0) / 1000, tz=timezone.utc).isoformat()
+                })
+            return result
         except Exception as e:
             logger.error(f"get_closed_pnl failed: {e}")
             return []

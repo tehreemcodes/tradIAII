@@ -360,9 +360,32 @@ def run_trading_loop(
         wake_time  = datetime.now(timezone.utc) + timedelta(seconds=sleep_secs)
         logger.info(
             f"Sleeping {sleep_secs/60:.1f} min → "
-            f"next check at {wake_time.strftime('%H:%M:%S UTC')}"
+            f"next check at {wake_time.strftime('%H:%M:%S UTC')} (chunked polling)"
         )
-        time.sleep(sleep_secs)
+        
+        # Polling loop: sleep 10s, check if positions closed to cancel orphans instantly
+        chunk_interval = 10.0
+        elapsed = 0.0
+        while elapsed < sleep_secs:
+            if STOP_FILE.exists():
+                break
+                
+            time.sleep(min(chunk_interval, sleep_secs - elapsed))
+            elapsed += chunk_interval
+            
+            if LIVE_TRADING_ENABLED and tracker.has_open_trade():
+                try:
+                    exchange_positions = executor.get_open_positions()
+                    exchange_ids = {p.get("symbol").replace("/", "").split(":")[0] for p in exchange_positions}
+                    
+                    for trade in tracker.get_open_trades():
+                        trade_symbol = trade.get("symbol", "").replace("/", "").split(":")[0]
+                        if trade_symbol not in exchange_ids:
+                            logger.info(f"Chunk-Poll: Position {trade_symbol} naturally closed. Canceling orphan SL/TP orders.")
+                            executor.cancel_all_conditional_orders(symbol=trade_symbol)
+                            # Actually closing the trade logic will happen at Step 1 of the main loop.
+                except Exception as e:
+                    logger.warning(f"Chunk-Poll error: {e}")
 
     logger.info("Live trader stopped.")
 

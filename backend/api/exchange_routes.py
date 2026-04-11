@@ -26,7 +26,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-import ccxt
+
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 
@@ -188,16 +188,17 @@ def connect_exchange(req: ConnectRequest):
 
         balance = executor.get_balance()
 
-    except ccxt.AuthenticationError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API credentials. Check key and secret."
-        )
-    except ccxt.NetworkError:
-        raise HTTPException(
-            status_code=503,
-            detail="Exchange unreachable. Check your internet connection."
-        )
+    except ExecutorError as e:
+        if "API Error" in str(e) or "key" in str(e).lower() or "signature" in str(e).lower():
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API credentials. Check key and secret."
+            )
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Exchange error: {e}"
+            )
     except HTTPException:
         raise
     except Exception as e:

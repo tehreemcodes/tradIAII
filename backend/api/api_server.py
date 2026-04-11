@@ -107,6 +107,8 @@ class PatternInfo(BaseModel):
 
 class SignalResponse(BaseModel):
     signal:        str
+    strategy_type: str = "none"
+    regime:        str = "UNKNOWN"
     confidence:    float
     entry:         Optional[float] = None
     sl:            Optional[float] = None
@@ -114,6 +116,8 @@ class SignalResponse(BaseModel):
     rr:            str
     risk_amount:   float
     position_size: float
+    be_threshold:  float = 0.0
+    risk_pct:      float = 0.0
     timestamp:     str
     candle_time:   Optional[str]   = None
     pair:          str
@@ -121,6 +125,8 @@ class SignalResponse(BaseModel):
     htf_bias:      Optional[HTFBias]     = None
     pattern:       Optional[PatternInfo] = None
     error:         Optional[str]         = None
+    executable:    Optional[bool]        = None
+    reject_reason: Optional[str]         = None
 
 class CandleResponse(BaseModel):
     timeframe: str
@@ -248,6 +254,8 @@ def get_signal(
 
     return SignalResponse(
         signal        = result.get("signal", "NO TRADE"),
+        strategy_type = result.get("strategy_type", "none"),
+        regime        = result.get("regime", "UNKNOWN"),
         confidence    = result.get("confidence", 0.0),
         entry         = result.get("entry"),
         sl            = result.get("sl"),
@@ -255,6 +263,8 @@ def get_signal(
         rr            = result.get("rr", f"1:{REWARD_RATIO}"),
         risk_amount   = result.get("risk_amount", 0.0),
         position_size = result.get("position_size", 0.0),
+        be_threshold  = result.get("be_threshold", 0.0),
+        risk_pct      = result.get("risk_pct", 0.0),
         timestamp     = result.get("timestamp", datetime.now(timezone.utc).isoformat()),
         candle_time   = result.get("candle_time"),
         pair          = result.get("pair", "BTC/USDT"),
@@ -264,6 +274,8 @@ def get_signal(
         pattern       = PatternInfo(**result["pattern"])
                         if result.get("pattern") else None,
         error         = result.get("error"),
+        executable    = result.get("executable"),
+        reject_reason = result.get("reject_reason"),
     )
 
 
@@ -573,6 +585,60 @@ def reload_model_cache():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/regime")
+def get_regime():
+    """
+    Return current market regime classification.
+    Used by the dashboard to display regime state.
+    """
+    try:
+        import ccxt
+        import pandas as pd
+        from backend.config.settings import SYMBOL, EXCHANGE
+        from backend.services.ict_strategy import run_ict_pipeline
+        from backend.services.state_machine import run_state_machine
+        from backend.services.multi_timeframe import merge_htf_into_ltf
+        from backend.services.feature_builder import build_features
+        from backend.services.market_regime import MarketRegimeDetector
+
+        # Fetch data
+        raw = None
+        for name in [EXCHANGE, "bybit", "kucoin"]:
+            try:
+                ex = getattr(ccxt, name)({"enableRateLimit": True})
+                raw = ex.fetch_ohlcv(SYMBOL, SIGNAL_TF, limit=201)
+                break
+            except Exception:
+                continue
+        if raw is None:
+            raise RuntimeError("No exchange available")
+
+        df = pd.DataFrame(raw, columns=["timestamp","open","high","low","close","volume"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        df = df.set_index("timestamp").sort_index().iloc[:-1]
+
+        df = run_ict_pipeline(df)
+        df = run_state_machine(df)
+        df = build_features(df)
+
+        detector = MarketRegimeDetector()
+        result = detector.classify(df)
+
+        return {
+            "regime":          result.regime.value,
+            "strategy_type":   result.strategy_type,
+            "confidence":      round(result.confidence, 4),
+            "adx":             round(result.adx, 2),
+            "atr_percentile":  round(result.atr_percentile, 4),
+            "trend_strength":  round(result.trend_strength, 4),
+            "structure_score": round(result.structure_score, 4),
+            "reason":          result.reason,
+        }
+    except Exception as e:
+        logger.exception("get_regime failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/backtest")
 def backtest_summary():
     """Return the last saved backtest summary (full JSON)."""
@@ -665,25 +731,25 @@ def get_live_status(x_session_id: Optional[str] = Header(None)):
         "win_rate_pct": stats.get("win_rate_pct", 0.0),
         "running_capital": stats.get("running_capital", settings.INITIAL_CAPITAL),
         "max_drawdown_pct": stats.get("max_drawdown_pct", 0.0),
-        "today_pnl": stats.get("total_pnl", 0.0), # Fallback for today_pnl for now
-        "daily_drawdown_pct": stats.get("max_drawdown_pct", 0.0)
+        "today_pnl": stats.get("total_pnl", 0.0),
+        "daily_drawdown_pct": stats.get("max_drawdown_pct", 0.0),
+        "regime": sig.get("regime", "UNKNOWN") if sig else "UNKNOWN",
+        "strategy_type": sig.get("strategy_type", "none") if sig else "none",
     }
 
 @app.post("/api/debug/connect")
 async def debug_connect(request: Request):
-    import ccxt
+    from backend.services.trade_executor import BinanceFuturesExecutor
     body = await request.json()
     try:
-        ex = ccxt.binance({
-            "apiKey":          body.get("api_key"),
-            "secret":          body.get("api_secret"),
-            "enableRateLimit": True,
-            "options": {
-                "defaultType": "future",
-                "recvWindow":  10000,
-            },
-        })
-        balance = ex.fetch_balance()
-        return {"success": True, "usdt": str(balance.get("USDT"))}
+        ex = BinanceFuturesExecutor(
+            api_key    = body.get("api_key"),
+            api_secret = body.get("api_secret"),
+            testnet    = False,
+        )
+        if ex.connect():
+            return {"success": True, "usdt": str(ex.get_balance())}
+        else:
+            return {"success": False, "error": "Connection failed"}
     except Exception as e:
         return {"success": False, "error": str(e)}

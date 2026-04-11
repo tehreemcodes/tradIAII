@@ -99,6 +99,26 @@ FEATURE_COLS: list[str] = [
     "htf_bear_confluence",
     "full_bull_confluence",
     "full_bear_confluence",
+
+    # NEW: Market Regime
+    "regime_trending",
+    "regime_volatility",
+    "adx_14",
+    "trend_strength",
+
+    # NEW: Momentum & Mean Reversion
+    "rsi_14",
+    "rsi_regime",
+    "momentum_4h",
+    "funding_rate_proxy",
+    "bb_position",
+
+    # NEW: Dual-Strategy Features
+    "regime_class",           # 0=LOW_VOL, 1=RANGING, 2=HIGH_VOL, 3=TRENDING
+    "ema_slope_8",            # rate of change of EMA(8), normalized
+    "structure_score",        # HH/HL vs LH/LL score (-1 to +1)
+    "pullback_depth",         # retracement % from last swing extreme
+    "displacement_to_atr",    # displacement candle body / ATR14
 ]
 
 
@@ -218,6 +238,117 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── Ensure pattern_duration exists ───────────────────────
     if "pattern_duration" not in df.columns:
         df["pattern_duration"] = np.nan
+
+    # ── NEW: Market Regime & Momentum Features ────────────────
+    # ADX (14-period)
+    plus_dm  = (df["high"] - df["high"].shift(1)).clip(lower=0)
+    minus_dm = (df["low"].shift(1) - df["low"]).clip(lower=0)
+    # Avoid overlapping
+    plus_dm_val = plus_dm.copy()
+    minus_dm_val = minus_dm.copy()
+    plus_dm[plus_dm_val < minus_dm_val] = 0
+    minus_dm[minus_dm_val < plus_dm_val] = 0
+    atr14_feature = df["atr_14"]
+    plus_di  = 100 * (plus_dm.ewm(span=14).mean()  / atr14_feature.replace(0, np.nan))
+    minus_di = 100 * (minus_dm.ewm(span=14).mean() / atr14_feature.replace(0, np.nan))
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    adx = dx.ewm(span=14).mean().fillna(0)
+    df["adx_14"] = adx
+    df["regime_trending"] = (adx > 25).astype(int)
+
+    # Realized volatility regime (rolling 20-bar std of log returns)
+    log_ret = np.log(df["close"] / df["close"].shift(1)).fillna(0)
+    realized_vol = log_ret.rolling(20).std().fillna(0)
+    vol_percentile = realized_vol.rolling(100, min_periods=10).rank(pct=True).fillna(0.5)
+    df["regime_volatility"] = vol_percentile
+
+    # EMA trend alignment score
+    ema8   = df["close"].ewm(span=8).mean()
+    ema21  = df["close"].ewm(span=21).mean()
+    ema55  = df["close"].ewm(span=55).mean()
+    bull_align = ((ema8 > ema21).astype(int) + (ema21 > ema55).astype(int)) / 2
+    bear_align = ((ema8 < ema21).astype(int) + (ema21 < ema55).astype(int)) / 2
+    df["trend_strength"] = bull_align - bear_align  # range: -1 to +1
+
+    # RSI 14
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    df["rsi_14"] = rsi.fillna(50)
+    df["rsi_regime"] = pd.cut(df["rsi_14"], bins=[-np.inf, 30, 70, np.inf],
+                              labels=[0, 1, 2]).astype(float).fillna(1)
+
+    # 4H momentum proxy (using available close data, 3-period return)
+    df["momentum_4h"] = df["close"].pct_change(3).fillna(0)
+
+    # Funding rate proxy (volume zscore is a reasonable stand-in on 15m/1h TF)
+    df["funding_rate_proxy"] = df.get("volume_zscore", 0.0)
+
+    # Bollinger Band position
+    bb_mid = df["close"].rolling(20).mean()
+    bb_std = df["close"].rolling(20).std()
+    bb_upper = bb_mid + 2 * bb_std
+    bb_lower = bb_mid - 2 * bb_std
+    bb_range = (bb_upper - bb_lower).replace(0, np.nan)
+    df["bb_position"] = ((df["close"] - bb_lower) / bb_range).fillna(0.5).clip(0, 1)
+
+    # ── NEW: Dual-Strategy Features ──────────────────────────
+
+    # Regime class (numeric encoding for ML)
+    # Uses the same logic as MarketRegimeDetector but as a simple numeric feature
+    regime_class = np.ones(len(df), dtype=float)  # default = RANGING (1)
+    regime_class[(df["atr_percentile"] < 0.25) & (adx < 20)] = 0  # LOW_VOL
+    regime_class[(df["atr_percentile"] > 0.75) & (adx < 25)] = 2  # HIGH_VOL
+    regime_class[(adx > 25) & (df["trend_strength"].abs() >= 0.5)] = 3  # TRENDING
+    df["regime_class"] = regime_class
+
+    # EMA slope (rate of change of EMA8, normalized by close)
+    ema8_vals = df["close"].ewm(span=8).mean()
+    ema_slope = (ema8_vals - ema8_vals.shift(2)) / (2.0 * c)
+    df["ema_slope_8"] = ema_slope.fillna(0.0)
+
+    # Structure score: count HH/HL vs LH/LL in rolling window
+    def _rolling_structure(df_in, window=20):
+        scores = np.zeros(len(df_in))
+        sh_flags = df_in.get("swing_high", pd.Series(False, index=df_in.index)).values
+        sl_flags = df_in.get("swing_low", pd.Series(False, index=df_in.index)).values
+        sh_prices = df_in.get("swing_high_price", pd.Series(np.nan, index=df_in.index)).values
+        sl_prices = df_in.get("swing_low_price", pd.Series(np.nan, index=df_in.index)).values
+
+        for i in range(window, len(df_in)):
+            # Count structure in lookback window
+            start = max(0, i - window)
+            hh = hl = lh = ll = 0
+            prev_sh = prev_sl = np.nan
+            for k in range(start, i + 1):
+                if sh_flags[k] and not np.isnan(sh_prices[k]):
+                    if not np.isnan(prev_sh):
+                        if sh_prices[k] > prev_sh: hh += 1
+                        elif sh_prices[k] < prev_sh: lh += 1
+                    prev_sh = sh_prices[k]
+                if sl_flags[k] and not np.isnan(sl_prices[k]):
+                    if not np.isnan(prev_sl):
+                        if sl_prices[k] > prev_sl: hl += 1
+                        elif sl_prices[k] < prev_sl: ll += 1
+                    prev_sl = sl_prices[k]
+            total = hh + hl + lh + ll
+            scores[i] = (hh + hl - lh - ll) / total if total > 0 else 0.0
+        return scores
+
+    df["structure_score"] = _rolling_structure(df)
+
+    # Pullback depth: how far price has retraced from last swing extreme
+    last_sh = df.get("swing_high_price", pd.Series(np.nan, index=df.index)).ffill()
+    last_sl_price = df.get("swing_low_price", pd.Series(np.nan, index=df.index)).ffill()
+    swing_range = (last_sh - last_sl_price).replace(0, np.nan)
+    pullback = (last_sh - df["close"]) / swing_range
+    df["pullback_depth"] = pullback.fillna(0.5).clip(0, 1)
+
+    # Displacement to ATR ratio: how large was the CISD body relative to ATR
+    cisd_body = df.get("cisd_body_ratio", pd.Series(0.0, index=df.index))
+    df["displacement_to_atr"] = (cisd_body * body / atr14.replace(0, np.nan)).fillna(0.0)
 
     return df
 

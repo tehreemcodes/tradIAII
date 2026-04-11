@@ -1,44 +1,37 @@
 """
-Live Signal Generator
-======================
-Fetches latest CLOSED candles, runs full ICT pipeline, returns signal dict.
-Called by the API server on every /api/signal request.
+Live Signal Generator v3 — Dual-Strategy Hybrid
+==================================================
+Fetches latest CLOSED candles, runs full ICT pipeline, then applies the
+StrategyEngine to detect market regime and route to the appropriate
+strategy (Scalp 1R or Trend 2R) with ML ensemble gating.
 
-FIXES v2:
-    1. Forming candle dropped before pipeline runs
-       The last candle from the exchange is always the CURRENTLY OPEN
-       candle — its OHLCV values are incomplete and change every tick.
-       Running the ICT pipeline on it produces incorrect FVG confirmations,
-       wrong body ratios, and partial volume. We now fetch limit+1 candles
-       and drop the last one so all processing is on fully closed candles.
-
-    2. Model artifacts cached at module level
-       The old code called joblib.load() on every API request — adding
-       100-500ms disk I/O latency per call. Artifacts are now loaded once
-       on first call and cached as module globals. Call reload_model() after
-       retraining to invalidate the cache.
-
-    3. Exchange connection validation hardened
-       Added a connectivity check before processing to surface exchange
-       errors clearly rather than failing silently mid-pipeline.
+v3 Changes:
+    - Integrated MarketRegimeDetector + StrategyEngine
+    - Returns strategy_type ("scalp" | "trend") and regime info
+    - Falls back to legacy single-model if ensemble not trained
+    - Breakeven threshold included in response for live_trader
 
 Returns:
     {
-        "signal":        "BUY" | "SELL" | "NO TRADE"
-        "confidence":    0.0 - 1.0
-        "entry":         float
-        "sl":            float | None
-        "tp":            float | None
-        "rr":            "1:2.0"
-        "risk_amount":   float
-        "position_size": float
-        "timestamp":     ISO string   (timestamp of the SIGNAL candle)
-        "candle_time":   ISO string   (timestamp of the last CLOSED candle)
-        "pair":          "BTC/USDT"
-        "timeframe":     "1h"
-        "htf_bias":      {"h4": int, "d1": int, "full_confluence": bool}
-        "pattern":       {"swing_price": float, "fvg_top": float, "fvg_bot": float}
-        "error":         str | None
+        "signal":         "BUY" | "SELL" | "NO TRADE"
+        "strategy_type":  "scalp" | "trend" | "none"
+        "regime":         "TRENDING" | "RANGING" | "HIGH_VOLATILITY" | "LOW_VOLATILITY"
+        "confidence":     0.0 - 1.0
+        "entry":          float
+        "sl":             float | None
+        "tp":             float | None
+        "rr":             "1:1.0" | "1:2.0"
+        "risk_amount":    float
+        "position_size":  float
+        "be_threshold":   float   (R-multiple for breakeven move)
+        "risk_pct":       float   (per-trade risk %)
+        "timestamp":      ISO string
+        "candle_time":    ISO string
+        "pair":           "BTC/USDT"
+        "timeframe":      "1h"
+        "htf_bias":       {...}
+        "pattern":        {...}
+        "error":          str | None
     }
 """
 import ccxt
@@ -59,6 +52,7 @@ from backend.services.state_machine   import run_state_machine
 from backend.services.multi_timeframe import merge_htf_into_ltf
 from backend.services.feature_builder import build_features, FEATURE_COLS
 from backend.services.risk_manager    import RiskManager
+from backend.services.strategy_engine import StrategyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +68,9 @@ _exchange = None
 _models   = {}
 _scalers  = {}
 _features = {}
+
+# Strategy engine — single instance reused across calls
+_strategy_engine: StrategyEngine = None
 
 
 # ── Exchange ──────────────────────────────────────────────────────────────────
@@ -150,8 +147,9 @@ def reload_model(timeframe: str = None) -> None:
     """
     Clear the in-memory model cache.
     If timeframe is given, clears only that TF. Otherwise clears all.
+    Also clears the StrategyEngine ensemble cache.
     """
-    global _models, _scalers, _features
+    global _models, _scalers, _features, _strategy_engine
     if timeframe:
         _models.pop(timeframe, None)
         _scalers.pop(timeframe, None)
@@ -162,6 +160,19 @@ def reload_model(timeframe: str = None) -> None:
         _scalers.clear()
         _features.clear()
         logger.info("All model artifact caches cleared.")
+
+    # Also clear strategy engine's ensemble cache
+    if _strategy_engine is not None:
+        _strategy_engine.clear_model_cache()
+        logger.info("StrategyEngine ensemble cache cleared.")
+
+
+def _get_strategy_engine() -> StrategyEngine:
+    """Return the cached StrategyEngine singleton."""
+    global _strategy_engine
+    if _strategy_engine is None:
+        _strategy_engine = StrategyEngine()
+    return _strategy_engine
 
 
 def _load_model_artifacts(timeframe: str) -> tuple:
@@ -224,25 +235,31 @@ def _safe_float(val) -> float | None:
         return None
 
 
-def _no_trade(reason: str, log_level: str = "warning") -> dict:
+def _no_trade(reason: str, log_level: str = "warning", regime: str = "UNKNOWN") -> dict:
     """Build a standardised NO TRADE response with an error message."""
     getattr(logger, log_level)(f"NO TRADE: {reason}")
     return {
-        "signal":        "NO TRADE",
-        "confidence":    0.0,
-        "entry":         None,
-        "sl":            None,
-        "tp":            None,
-        "rr":            f"1:{REWARD_RATIO}",
-        "risk_amount":   0.0,
-        "position_size": 0.0,
-        "timestamp":     datetime.now(timezone.utc).isoformat(),
-        "candle_time":   None,
-        "pair":          SYMBOL,
-        "timeframe":     SIGNAL_TF,
-        "htf_bias":      {"h4": 0, "d1": 0, "full_confluence": False},
-        "pattern":       {"swing_price": None, "fvg_top": None, "fvg_bot": None},
-        "error":         reason,
+        "signal":         "NO TRADE",
+        "strategy_type":  "none",
+        "regime":         regime,
+        "confidence":     0.0,
+        "entry":          None,
+        "sl":             None,
+        "tp":             None,
+        "rr":             f"1:{REWARD_RATIO}",
+        "risk_amount":    0.0,
+        "position_size":  0.0,
+        "be_threshold":   0.0,
+        "risk_pct":       0.0,
+        "timestamp":      datetime.now(timezone.utc).isoformat(),
+        "candle_time":    None,
+        "pair":           SYMBOL,
+        "timeframe":      SIGNAL_TF,
+        "htf_bias":       {"h4": 0, "d1": 0, "full_confluence": False},
+        "pattern":        {"swing_price": None, "fvg_top": None, "fvg_bot": None},
+        "error":          reason,
+        "executable":     False,
+        "reject_reason":  reason,
     }
 
 
@@ -308,24 +325,18 @@ def get_live_signal(
         )
 
     # ── Step 5: Scan recent candles for signals ──────────────────────────────
-    # AUDIT FIX BUG#3: The state machine marks signal=2 (BUY) or signal=0
-    # (SELL) only on the exact candle where a Swing→CISD→FVG completes.
-    # Checking only iloc[-1] missed ~99% of signals. Scan the last N
-    # candles to find the most recent completed pattern.
-    SIGNAL_SCAN_WINDOW = 10  # AUDIT FIX BUG#3: look back 10 candles
+    SIGNAL_SCAN_WINDOW = 10
     recent      = df.iloc[-SIGNAL_SCAN_WINDOW:]
     signal_mask = recent["signal"].isin([0, 2])
     signal_candles = recent[signal_mask]
 
     is_stale = False
     if len(signal_candles) > 0:
-        last       = signal_candles.iloc[-1]      # AUDIT FIX BUG#3: signal candle row
-        sig_ts     = signal_candles.index[-1]      # AUDIT FIX BUG#3: signal candle time
-        candle_ts  = sig_ts                        # AUDIT FIX BUG#3: for dedup
+        last       = signal_candles.iloc[-1]
+        sig_ts     = signal_candles.index[-1]
+        candle_ts  = sig_ts
         raw_signal = int(last["signal"])
-        
-        # STALE SIGNAL CHECK: if the signal didn't occur within the last 3 candles,
-        # it is a historical/stale signal.
+
         tf_secs = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
         max_age_secs = tf_secs.get(timeframe, 900) * 3
         if (df.index[-1] - sig_ts).total_seconds() > max_age_secs:
@@ -348,113 +359,104 @@ def get_live_signal(
             f"close={float(last['close']):,.2f}"
         )
 
-    # ── Step 6: Model inference ───────────────────────────────────────────────
-    # Use only the features the model was trained on.
-    # Wrap in DataFrame to preserve feature names for LightGBM.
-    avail   = [f for f in features if f in df.columns]
-    missing = [f for f in features if f not in df.columns]
-    if missing:
-        logger.warning(f"Features missing at inference (filled 0): {missing}")
+    # ── Step 6: Strategy Engine — Regime + Strategy + ML Gate ─────────────────
+    engine = _get_strategy_engine()
 
-    x_raw = df.loc[[sig_ts], avail].fillna(0)  # AUDIT FIX BUG#3: use signal candle features
-    x_sc  = pd.DataFrame(
-        scaler.transform(x_raw), columns=avail
+    # Get regime classification (always, even for NO TRADE)
+    regime_result = engine.regime_detector.classify(df, last)
+    regime_str = regime_result.regime.value
+
+    if raw_signal == 1:  # No ICT pattern
+        return _no_trade("No ICT pattern in scan window", regime=regime_str)
+
+    # Run full strategy engine evaluation
+    strat_signal = engine.evaluate(df, last, timeframe=timeframe)
+
+    signal          = strat_signal.signal
+    strategy_type   = strat_signal.strategy_type
+    win_prob        = strat_signal.confidence
+    executable      = strat_signal.executable
+    reject_reason   = strat_signal.reason if not executable else None
+    rr_used         = strat_signal.rr
+    risk_pct        = strat_signal.risk_pct
+    be_threshold    = strat_signal.be_threshold
+
+    logger.info(
+        f"Strategy: {strategy_type} | Regime: {regime_str} | "
+        f"Signal: {signal} | Confidence: {win_prob:.4f} | "
+        f"Executable: {executable}"
     )
 
-    proba    = model.predict_proba(x_sc)[0]
-    win_prob = float(proba[1])   # probability of WIN (class 1)
+    # Hard block stale signals
+    if executable and is_stale:
+        executable = False
+        reject_reason = "Signal is stale (not from current candle close)"
 
-    logger.info(f"Model confidence: {win_prob:.4f}  (threshold: {MIN_CONFIDENCE})")
+    # ── Step 7: Legacy model inference (backward compat) ─────────────────────
+    # Also run the legacy single model for comparison logging
+    legacy_confidence = 0.0
+    try:
+        avail   = [f for f in features if f in df.columns]
+        x_raw = df.loc[[sig_ts], avail].fillna(0)
+        x_sc  = pd.DataFrame(scaler.transform(x_raw), columns=avail)
+        proba    = model.predict_proba(x_sc)[0]
+        legacy_confidence = float(proba[1])
+        logger.debug(f"Legacy model confidence: {legacy_confidence:.4f}")
+    except Exception as e:
+        logger.debug(f"Legacy model inference skipped: {e}")
 
-    # ── Step 7: Signal decision & Dynamic Thresholding ───────────────────────
-    sig_map = {2: "BUY", 0: "SELL", 1: "NO TRADE"}
-    signal  = sig_map.get(raw_signal, "NO TRADE")
-    
-    executable = False
-    reject_reason = None
-    dynamic_threshold = MIN_CONFIDENCE
-
-    if signal != "NO TRADE":
-        htf_info = {
-            "h4": int(last.get("h4_bias", 0)),
-            "d1": int(last.get("d1_bias", 0)),
-            "full_confluence": bool(
-                last.get("full_bull_confluence", 0) or
-                last.get("full_bear_confluence", 0)
-            ),
-        }
-        
-        signal_dir_num = 1 if signal == "BUY" else -1
-        
-        # Calculate dynamic threshold based on HTF structure tailwind
-        if htf_info["full_confluence"]:
-            dynamic_threshold = MIN_CONFIDENCE - 0.05
-        elif htf_info["h4"] == signal_dir_num:
-            dynamic_threshold = MIN_CONFIDENCE
-        else:
-            dynamic_threshold = MIN_CONFIDENCE + 0.03  # AUDIT FIX BUG#5: reduced from +0.10
-            
-        dynamic_threshold = round(dynamic_threshold, 2)
-        
-        # Apply intelligent confidence filter
-        if win_prob >= dynamic_threshold:
-            executable = True
-        else:
-            reject_reason = f"ML Confidence {win_prob:.2f} < {dynamic_threshold:.2f} (Required)"
-            logger.info(f"Signal {signal} not executable — {reject_reason}")
-            
-        # Hard block if the signal is stale (to prevent execution on server restarts)
-        if executable and is_stale:
-            executable = False
-            reject_reason = "Signal is stale (not from current candle close)"
-            logger.info(f"Signal {signal} not executable — {reject_reason}")
+    # Use ensemble confidence if available, else fall back to legacy
+    if win_prob == 0.0 and legacy_confidence > 0:
+        win_prob = legacy_confidence
 
     # ── Step 8: Position sizing ───────────────────────────────────────────────
-    entry         = float(df.iloc[-1]["close"])  # AUDIT FIX BUG#3: current price for live entry
-    sl_raw        = last.get("signal_sl", np.nan)  # SL from signal candle's swing level
-    sl            = float(sl_raw) if not pd.isna(sl_raw) else None
-    tp            = None
+    entry         = float(df.iloc[-1]["close"])
+    sl            = strat_signal.sl
+    tp            = strat_signal.tp
     risk_amount   = 0.0
     position_size = 0.0
 
     if signal != "NO TRADE" and sl is not None:
-        risk     = abs(entry - sl)
-        tp_price = (entry + risk * REWARD_RATIO) if signal == "BUY" \
-                   else (entry - risk * REWARD_RATIO)
-        tp = round(tp_price, 2)
-
-        # Use compound=True for live trading — real position sizing
-        # against current account balance
         rm    = RiskManager(initial_capital=capital, compound=True)
-        trade = rm.calculate_position(entry, sl, signal, candle_ts)
+        trade = rm.calculate_position(
+            entry=entry,
+            sl=sl,
+            direction=signal,
+            ts=candle_ts,
+            strategy_type=strategy_type,
+            rr_override=rr_used,
+            risk_pct_override=risk_pct,
+            be_threshold=be_threshold,
+        )
         if trade:
             risk_amount   = trade.risk_amount
             position_size = trade.position_size
+            tp            = trade.tp  # use RM-calculated TP
         else:
-            # RiskManager rejected the trade (SL too close, bad direction, etc.)
             reject_reason = "Risk rejected (SL too tight or invalid)"
-            logger.warning(
-                f"RiskManager rejected position: entry={entry}, sl={sl}, "
-                f"direction={signal}"
-            )
+            logger.warning(f"RiskManager rejected: entry={entry}, sl={sl}")
             executable = False
 
     # ── Step 9: Build response ────────────────────────────────────────────────
     return {
-        "signal":        signal,
-        "executable":    executable,
-        "reject_reason": reject_reason,
-        "confidence":    round(win_prob, 4),
-        "entry":         round(entry, 2),
-        "sl":            round(sl, 2) if sl is not None else None,
-        "tp":            tp,
-        "rr":            f"1:{REWARD_RATIO}",
-        "risk_amount":   round(risk_amount, 2),
-        "position_size": round(position_size, 6),
-        "timestamp":     datetime.now(timezone.utc).isoformat(),
-        "candle_time":   candle_ts.isoformat(),
-        "pair":          SYMBOL,
-        "timeframe":     timeframe,
+        "signal":         signal,
+        "strategy_type":  strategy_type,
+        "regime":         regime_str,
+        "executable":     executable,
+        "reject_reason":  reject_reason,
+        "confidence":     round(win_prob, 4),
+        "entry":          round(entry, 2),
+        "sl":             round(sl, 2) if sl is not None else None,
+        "tp":             round(tp, 2) if tp is not None else None,
+        "rr":             f"1:{rr_used}",
+        "risk_amount":    round(risk_amount, 2),
+        "position_size":  round(position_size, 6),
+        "be_threshold":   be_threshold,
+        "risk_pct":       risk_pct,
+        "timestamp":      datetime.now(timezone.utc).isoformat(),
+        "candle_time":    candle_ts.isoformat(),
+        "pair":           SYMBOL,
+        "timeframe":      timeframe,
         "htf_bias": {
             "h4":              int(last.get("h4_bias", 0)),
             "d1":              int(last.get("d1_bias", 0)),

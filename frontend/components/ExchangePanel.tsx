@@ -20,51 +20,51 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ExchangeStatus {
-  connected:    boolean
-  exchange?:    string
-  testnet?:     boolean
-  balance?:     number
+  connected: boolean
+  exchange?: string
+  testnet?: boolean
+  balance?: number
   connected_at?: string
 }
 
 interface TradingStatus {
-  enabled:   boolean
+  enabled: boolean
   connected: boolean
-  risk_pct:  number
+  risk_pct: number
 }
 
 interface OpenTrade {
-  id:          string
-  direction:   'BUY' | 'SELL'
+  id: string
+  direction: 'BUY' | 'SELL'
   entry_price: number
-  sl_price:    number
-  tp_price:    number
-  size:        number
-  opened_at:   string
-  paper:       boolean
+  sl_price: number
+  tp_price: number
+  size: number
+  opened_at: string
+  paper: boolean
 }
 
 interface ClosedTrade {
-  id:          string
-  direction:   'BUY' | 'SELL'
+  id: string
+  direction: 'BUY' | 'SELL'
   entry_price: number
   close_price: number
-  pnl:         number
-  outcome:     'TP' | 'SL' | 'manual'
-  opened_at:   string
-  closed_at:   string
-  paper:       boolean
+  pnl: number
+  outcome: 'TP' | 'SL' | 'manual'
+  opened_at: string
+  closed_at: string
+  paper: boolean
 }
 
 interface LiveStats {
-  total_trades:     number
-  wins:             number
-  losses:           number
-  win_rate_pct:     number
-  total_pnl:        number
-  total_pnl_pct:    number
-  running_capital:  number
-  profit_factor:    number
+  total_trades: number
+  wins: number
+  losses: number
+  win_rate_pct: number
+  total_pnl: number
+  total_pnl_pct: number
+  running_capital: number
+  profit_factor: number
   max_drawdown_pct: number
 }
 
@@ -76,8 +76,8 @@ const fmt$ = (n: number) =>
 const timeAgo = (iso: string) => {
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
   if (s < 60) return `${s}s ago`
-  if (s < 3600) return `${Math.floor(s/60)}m ago`
-  return `${Math.floor(s/3600)}h ago`
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  return `${Math.floor(s / 3600)}h ago`
 }
 
 const authHeaders = (sessionId: string | null) =>
@@ -92,7 +92,7 @@ function StatusBadge({ connected, testnet }: { connected: boolean; testnet?: boo
         className="w-1.5 h-1.5 rounded-full"
         style={{
           background: connected ? '#2dd4bf' : 'rgba(255,255,255,0.2)',
-          boxShadow:  connected ? '0 0 6px #2dd4bf' : 'none',
+          boxShadow: connected ? '0 0 6px #2dd4bf' : 'none',
         }}
       />
       <span
@@ -115,12 +115,12 @@ function StatusBadge({ connected, testnet }: { connected: boolean; testnet?: boo
 
 function TradeRow({ trade }: { trade: ClosedTrade & { size?: number } }) {
   const win = trade.outcome === 'TP'
-  
+
   // Calculate ROI (20x leverage)
   let roi = 0
   if (trade.pnl != null && trade.entry_price != null && trade.size != null) {
-     const marginUsed = (trade.entry_price * trade.size) / 20
-     roi = (trade.pnl / marginUsed) * 100
+    const marginUsed = (trade.entry_price * trade.size) / 20
+    roi = (trade.pnl / marginUsed) * 100
   }
 
   return (
@@ -142,7 +142,7 @@ function TradeRow({ trade }: { trade: ClosedTrade & { size?: number } }) {
           className="text-[9px] px-1.5 py-0.5 rounded font-bold"
           style={{
             background: win ? 'rgba(45,212,191,0.10)' : 'rgba(244,63,94,0.10)',
-            color:      win ? '#2dd4bf' : '#f43f5e',
+            color: win ? '#2dd4bf' : '#f43f5e',
           }}
         >
           {trade.outcome}
@@ -159,7 +159,7 @@ function OpenTradeCard({ trade }: { trade: OpenTrade }) {
       className="rounded-lg p-3 mb-2"
       style={{
         background: trade.direction === 'BUY' ? 'rgba(45,212,191,0.06)' : 'rgba(244,63,94,0.06)',
-        border:     `1px solid ${trade.direction === 'BUY' ? 'rgba(45,212,191,0.15)' : 'rgba(244,63,94,0.15)'}`,
+        border: `1px solid ${trade.direction === 'BUY' ? 'rgba(45,212,191,0.15)' : 'rgba(244,63,94,0.15)'}`,
       }}
     >
       <div className="flex items-center justify-between mb-2">
@@ -168,7 +168,7 @@ function OpenTradeCard({ trade }: { trade: OpenTrade }) {
             className="text-[10px] font-bold px-1.5 py-0.5 rounded"
             style={{
               background: trade.direction === 'BUY' ? 'rgba(45,212,191,0.15)' : 'rgba(244,63,94,0.15)',
-              color:      trade.direction === 'BUY' ? '#2dd4bf' : '#f43f5e',
+              color: trade.direction === 'BUY' ? '#2dd4bf' : '#f43f5e',
             }}
           >
             {trade.direction}
@@ -180,8 +180,8 @@ function OpenTradeCard({ trade }: { trade: OpenTrade }) {
       <div className="grid grid-cols-3 gap-1 text-center">
         {[
           { l: 'Entry', v: fmt$(trade.entry_price), c: 'rgba(255,255,255,0.6)' },
-          { l: 'SL',    v: fmt$(trade.sl_price),    c: '#f43f5e' },
-          { l: 'TP',    v: fmt$(trade.tp_price),     c: '#2dd4bf' },
+          { l: 'SL', v: fmt$(trade.sl_price), c: '#f43f5e' },
+          { l: 'TP', v: fmt$(trade.tp_price), c: '#2dd4bf' },
         ].map(p => (
           <div key={p.l}>
             <p className="text-[9px] text-white/20 mb-0.5">{p.l}</p>
@@ -197,17 +197,16 @@ function OpenTradeCard({ trade }: { trade: OpenTrade }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function ExchangePanel() {
-  const [sessionId,      setSessionId]      = useState<string | null>(null)
-  const [showModal,      setShowModal]      = useState(false)
-  const [exStatus,       setExStatus]       = useState<ExchangeStatus>({ connected: false })
-  const [tradingStatus,  setTradingStatus]  = useState<TradingStatus>({ enabled: false, connected: false, risk_pct: 0.1 })
-  const [openTrades,     setOpenTrades]     = useState<OpenTrade[]>([])
-  const [closedTrades,   setClosedTrades]   = useState<ClosedTrade[]>([])
-  const [stats,          setStats]          = useState<LiveStats | null>(null)
-  const [riskPct,        setRiskPct]        = useState(10)
-  const [togglingTrade,  setTogglingTrade]  = useState(false)
-  const [paperMode,      setPaperMode]      = useState<boolean | null>(null)
-  const [togglingPaper,  setTogglingPaper]  = useState(false)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [showModal, setShowModal] = useState(false)
+  const [exStatus, setExStatus] = useState<ExchangeStatus>({ connected: false })
+  const [tradingStatus, setTradingStatus] = useState<TradingStatus>({ enabled: false, connected: false, risk_pct: 0.1 })
+  const [openTrades, setOpenTrades] = useState<OpenTrade[]>([])
+  const [closedTrades, setClosedTrades] = useState<ClosedTrade[]>([])
+  const [stats, setStats] = useState<LiveStats | null>(null)
+  const [togglingTrade, setTogglingTrade] = useState(false)
+  const [paperMode, setPaperMode] = useState<boolean | null>(null)
+  const [togglingPaper, setTogglingPaper] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Load session from localStorage on mount
@@ -220,40 +219,40 @@ export default function ExchangePanel() {
   const fetchStatus = useCallback(async (sid: string | null) => {
     if (!sid) return
     try {
-      const res  = await fetch(`${API_BASE}/api/exchange/status`, { headers: authHeaders(sid) })
+      const res = await fetch(`${API_BASE}/api/exchange/status`, { headers: authHeaders(sid) })
       const data = await res.json()
       setExStatus(data)
-    } catch {}
+    } catch { }
   }, [])
 
   // Fetch trading status
   const fetchTradingStatus = useCallback(async (sid: string | null) => {
     if (!sid) return
     try {
-      const res  = await fetch(`${API_BASE}/api/trading/status`, { headers: authHeaders(sid) })
+      const res = await fetch(`${API_BASE}/api/trading/status`, { headers: authHeaders(sid) })
       const data = await res.json()
       setTradingStatus(data)
-    } catch {}
+    } catch { }
   }, [])
 
   // Fetch trades
   const fetchTrades = useCallback(async (sid: string | null) => {
     try {
-      const res  = await fetch(`${API_BASE}/api/trades`, { headers: authHeaders(sid) })
+      const res = await fetch(`${API_BASE}/api/trades`, { headers: authHeaders(sid) })
       const data = await res.json()
       setOpenTrades(data.open ?? [])
       setClosedTrades(data.closed ?? [])
       setStats(data.stats ?? null)
-    } catch {}
+    } catch { }
   }, [])
 
   // Fetch paper mode
   const fetchPaperMode = useCallback(async () => {
     try {
-      const res  = await fetch(`${API_BASE}/api/trading/paper-mode`)
+      const res = await fetch(`${API_BASE}/api/trading/paper-mode`)
       const data = await res.json()
       setPaperMode(data.paper_mode ?? true)
-    } catch {}
+    } catch { }
   }, [])
 
   const fetchAll = useCallback((sid: string | null) => {
@@ -297,7 +296,7 @@ export default function ExchangePanel() {
     setTogglingTrade(true)
     try {
       const endpoint = tradingStatus.enabled ? 'disable' : 'enable'
-      const url      = `${API_BASE}/api/trading/${endpoint}${!tradingStatus.enabled ? `?risk_pct=${riskPct/100}` : ''}`
+      const url = `${API_BASE}/api/trading/${endpoint}`
       await fetch(url, { method: 'POST', headers: authHeaders(sessionId) })
       await fetchTradingStatus(sessionId)
     } finally {
@@ -309,9 +308,9 @@ export default function ExchangePanel() {
     setTogglingPaper(true)
     try {
       await fetch(`${API_BASE}/api/trading/paper-mode`, {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders(sessionId) },
-        body:    JSON.stringify({ enabled: !paperMode }),
+        body: JSON.stringify({ enabled: !paperMode }),
       })
       await fetchPaperMode()
     } finally {
@@ -357,9 +356,9 @@ export default function ExchangePanel() {
               className="text-[9px] px-2.5 py-1 rounded-lg transition-all font-semibold"
               style={{
                 background: 'rgba(244,63,94,0.08)',
-                border:     '1px solid rgba(244,63,94,0.15)',
-                color:      '#f43f5e',
-                cursor:     'pointer',
+                border: '1px solid rgba(244,63,94,0.15)',
+                color: '#f43f5e',
+                cursor: 'pointer',
               }}
             >
               Disconnect
@@ -370,9 +369,9 @@ export default function ExchangePanel() {
               className="text-[9px] px-2.5 py-1 rounded-lg transition-all font-bold"
               style={{
                 background: 'linear-gradient(135deg, rgba(45,212,191,0.15), rgba(59,130,246,0.15))',
-                border:     '1px solid rgba(45,212,191,0.25)',
-                color:      '#2dd4bf',
-                cursor:     'pointer',
+                border: '1px solid rgba(45,212,191,0.25)',
+                color: '#2dd4bf',
+                cursor: 'pointer',
               }}
             >
               Connect Exchange
@@ -390,7 +389,7 @@ export default function ExchangePanel() {
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all"
               style={{
                 background: paperMode ? 'rgba(245,158,11,0.10)' : 'rgba(244,63,94,0.08)',
-                border:     paperMode ? '1px solid rgba(245,158,11,0.20)' : '1px solid rgba(244,63,94,0.15)',
+                border: paperMode ? '1px solid rgba(245,158,11,0.20)' : '1px solid rgba(244,63,94,0.15)',
                 cursor: togglingPaper ? 'not-allowed' : 'pointer',
                 opacity: togglingPaper ? 0.5 : 1,
               }}
@@ -435,30 +434,19 @@ export default function ExchangePanel() {
               Auto Trading
             </p>
 
-            {/* Risk selector */}
-            {!tradingStatus.enabled && (
-              <div className="mb-2">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-white/30">Risk per trade</span>
-                  <span className="mono text-[11px] font-bold" style={{ color: '#f59e0b' }}>
-                    {riskPct}%
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={1} max={25} step={1}
-                  value={riskPct}
-                  onChange={e => setRiskPct(Number(e.target.value))}
-                  className="w-full h-1 rounded-full appearance-none cursor-pointer"
-                  style={{ accentColor: '#2dd4bf' }}
-                />
-                <div className="flex justify-between text-[9px] text-white/20 mt-0.5">
-                  <span>1% (safe)</span>
-                  <span>10% (demo)</span>
-                  <span>25% (high)</span>
-                </div>
+            {/* System Risk Display */}
+            <div className="mb-2 px-3 py-2 rounded-lg" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-white/40">Risk per trade</span>
+                <span className="mono text-[11px] font-bold text-yellow-400">
+                  {(tradingStatus.risk_pct * 100).toFixed(1)}%
+                </span>
               </div>
-            )}
+
+              <p className="text-[9px] text-white/30 mt-1">
+                System-controlled risk based on strategy (Scalp / Trend)
+              </p>
+            </div>
 
             <button
               onClick={toggleTrading}
@@ -469,7 +457,7 @@ export default function ExchangePanel() {
                   ? 'rgba(244,63,94,0.10)'
                   : 'linear-gradient(135deg, #2dd4bf, #3b82f6)',
                 border: tradingStatus.enabled ? '1px solid rgba(244,63,94,0.20)' : 'none',
-                color:  tradingStatus.enabled ? '#f43f5e' : '#0d1117',
+                color: tradingStatus.enabled ? '#f43f5e' : '#0d1117',
                 cursor: togglingTrade ? 'not-allowed' : 'pointer',
                 opacity: togglingTrade ? 0.6 : 1,
               }}
@@ -483,7 +471,7 @@ export default function ExchangePanel() {
                 style={{ background: 'rgba(45,212,191,0.06)', border: '1px solid rgba(45,212,191,0.12)' }}
               >
                 <p className="text-[10px] text-teal-400">
-                  🟢 Trading active · {(tradingStatus.risk_pct * 100).toFixed(0)}% risk per trade
+                  🟢 Trading active · {(tradingStatus.risk_pct * 100).toFixed(1)}% risk · Managed by system
                 </p>
               </div>
             )}
@@ -498,12 +486,18 @@ export default function ExchangePanel() {
             </p>
             <div className="grid grid-cols-3 gap-1.5 mb-3">
               {[
-                { l: 'P&L',      v: `${stats.total_pnl >= 0 ? '+' : ''}${stats.total_pnl_pct.toFixed(1)}%`,
-                  c: stats.total_pnl >= 0 ? '#2dd4bf' : '#f43f5e' },
-                { l: 'Win Rate', v: `${stats.win_rate_pct.toFixed(1)}%`,
-                  c: stats.win_rate_pct >= 50 ? '#2dd4bf' : '#f43f5e' },
-                { l: 'Trades',   v: String(stats.total_trades),
-                  c: 'rgba(255,255,255,0.6)' },
+                {
+                  l: 'P&L', v: `${stats.total_pnl >= 0 ? '+' : ''}${stats.total_pnl_pct.toFixed(1)}%`,
+                  c: stats.total_pnl >= 0 ? '#2dd4bf' : '#f43f5e'
+                },
+                {
+                  l: 'Win Rate', v: `${stats.win_rate_pct.toFixed(1)}%`,
+                  c: stats.win_rate_pct >= 50 ? '#2dd4bf' : '#f43f5e'
+                },
+                {
+                  l: 'Trades', v: String(stats.total_trades),
+                  c: 'rgba(255,255,255,0.6)'
+                },
               ].map(m => (
                 <div
                   key={m.l}
@@ -530,9 +524,9 @@ export default function ExchangePanel() {
                 className="text-[9px] px-2 py-0.5 rounded transition-all font-semibold"
                 style={{
                   background: 'rgba(244,63,94,0.08)',
-                  border:     '1px solid rgba(244,63,94,0.15)',
-                  color:      '#f43f5e',
-                  cursor:     'pointer',
+                  border: '1px solid rgba(244,63,94,0.15)',
+                  color: '#f43f5e',
+                  cursor: 'pointer',
                 }}
               >
                 Close All

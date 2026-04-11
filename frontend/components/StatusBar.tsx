@@ -27,6 +27,8 @@ interface LiveStatus {
   win_rate_pct:        number
   running_capital:     number
   total_pnl:           number
+  regime?:             string
+  strategy_type?:      string
 }
 
 const authHeaders = () => {
@@ -161,6 +163,29 @@ export default function StatusBar() {
 
         {/* Active TF */}
         <Pill label="TF" value={status.active_timeframe?.toUpperCase() ?? '—'} color="#60a5fa" />
+
+        {/* Market Regime */}
+        {status.regime && status.regime !== 'UNKNOWN' && (
+          <Pill
+            label="Regime"
+            value={status.regime.replace('_', ' ')}
+            color={
+              status.regime === 'TRENDING'        ? '#22d3ee' :
+              status.regime === 'RANGING'          ? '#f59e0b' :
+              status.regime === 'HIGH_VOLATILITY'  ? '#f43f5e' :
+              status.regime === 'LOW_VOLATILITY'   ? '#64748b' : '#a78bfa'
+            }
+          />
+        )}
+
+        {/* Active Strategy */}
+        {status.strategy_type && status.strategy_type !== 'none' && (
+          <Pill
+            label="Strategy"
+            value={status.strategy_type === 'scalp' ? '⚡ SCALP (1R)' : '📈 TREND (2R)'}
+            color={status.strategy_type === 'scalp' ? '#f59e0b' : '#22d3ee'}
+          />
+        )}
 
         {/* Win Rate */}
         <Pill label="Win Rate" value={`${status.win_rate_pct?.toFixed(1) ?? '0.0'}%`} color="#f59e0b" />

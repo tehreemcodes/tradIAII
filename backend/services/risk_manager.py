@@ -54,6 +54,9 @@ class Trade:
     fee_cost:       float           # total round-trip fees + slippage
     capital_before: float
     timestamp:      pd.Timestamp
+    strategy_type:  str   = "legacy"  # "scalp" | "trend" | "legacy"
+    be_threshold:   float = 0.5       # move SL to breakeven at this R-multiple
+    rr_used:        float = 3.0       # R:R actually used for this trade
 
     outcome:        Optional[str]   = None
     pnl:            Optional[float] = None   # net of fees
@@ -86,6 +89,10 @@ class RiskManager:
         self._day_start_capital: float = initial_capital
         self._current_day:       Optional[pd.Timestamp] = None
         self._halted:            bool  = False
+
+        # Per-strategy concurrent trade tracking
+        self._open_scalp_count: int = 0
+        self._open_trend_count: int = 0
 
     # ── Properties ───────────────────────────────────────────
 
@@ -165,13 +172,30 @@ class RiskManager:
         sl:        float,
         direction: str,
         ts:        pd.Timestamp,
+        strategy_type: str = "legacy",
+        rr_override: float = None,
+        risk_pct_override: float = None,
+        be_threshold: float = 0.5,
     ) -> Optional[Trade]:
         """
         Calculate position size with full validation.
-        Returns None if any check fails — caller receives no trade.
+        Returns None if any check fails.
+
+        Parameters:
+            strategy_type    : "scalp" | "trend" | "legacy"
+            rr_override      : override the default R:R for this trade
+            risk_pct_override: override the default risk % for this trade
+            be_threshold     : R-multiple at which to move SL to breakeven
         """
         allowed, reason = self.can_trade(ts)
         if not allowed:
+            return None
+
+        # Per-strategy concurrent trade check
+        from backend.config.settings import SCALP_MAX_CONCURRENT, TREND_MAX_CONCURRENT
+        if strategy_type == "scalp" and self._open_scalp_count >= SCALP_MAX_CONCURRENT:
+            return None
+        if strategy_type == "trend" and self._open_trend_count >= TREND_MAX_CONCURRENT:
             return None
 
         # SL direction validation
@@ -194,7 +218,9 @@ class RiskManager:
             sl = sl * (1 + SL_BUFFER_PCT)   # push SL slightly higher
         sl_dist = abs(entry - sl)           # recalculate with buffered SL
 
-        risk   = self.risk_amount
+        risk_pct_actual = risk_pct_override if risk_pct_override else self.risk_pct
+        base = self.capital if self.compound else self.initial_capital
+        risk   = round(base * risk_pct_actual, 2)
         pos_sz = risk / sl_dist
 
         # Notional safety cap
@@ -203,8 +229,9 @@ class RiskManager:
             pos_sz = max_notional / entry
             risk   = min(pos_sz * sl_dist, self.risk_amount)
 
-        tp = (entry + sl_dist * self.rr) if direction == "BUY" \
-             else (entry - sl_dist * self.rr)
+        rr_actual = rr_override if rr_override else self.rr
+        tp = (entry + sl_dist * rr_actual) if direction == "BUY" \
+             else (entry - sl_dist * rr_actual)
 
         # Calculate round-trip fee cost
         fee_cost = round(pos_sz * entry * ROUND_TRIP_COST, 2) \
@@ -218,10 +245,13 @@ class RiskManager:
             sl_distance    = round(sl_dist, 4),
             position_size  = round(pos_sz, 6),
             risk_amount    = round(risk, 2),
-            potential_gain = round(risk * self.rr, 2),
+            potential_gain = round(risk * rr_actual, 2),
             fee_cost       = fee_cost,
             capital_before = round(self.capital, 2),
             timestamp      = ts,
+            strategy_type  = strategy_type,
+            be_threshold   = be_threshold,
+            rr_used        = rr_actual,
         )
 
     # ── Outcome Recording ────────────────────────────────────
@@ -244,6 +274,12 @@ class RiskManager:
         trade.pnl          = round(net_pnl, 2)
         trade.capital_after= round(self.capital, 2)
         self.trade_log.append(trade)
+
+        # Update concurrent trade counters
+        if trade.strategy_type == "scalp":
+            self._open_scalp_count = max(0, self._open_scalp_count - 1)
+        elif trade.strategy_type == "trend":
+            self._open_trend_count = max(0, self._open_trend_count - 1)
 
         logger.info(
             f"{outcome} | {trade.direction} | "
@@ -301,3 +337,34 @@ class RiskManager:
         if not self.trade_log:
             return pd.DataFrame()
         return pd.DataFrame([t.__dict__ for t in self.trade_log])
+
+    # ── Breakeven Management ─────────────────────────────────
+
+    @staticmethod
+    def should_move_to_breakeven(trade: Trade, current_price: float) -> bool:
+        """
+        Check if a trade should have its SL moved to breakeven.
+
+        Scalp: move to BE at 0.5R unrealized
+        Trend: move to BE at 1.0R unrealized
+
+        Returns True if current unrealized profit >= threshold.
+        """
+        if trade.entry == 0 or trade.sl_distance == 0:
+            return False
+
+        if trade.direction == "BUY":
+            unrealized = current_price - trade.entry
+        else:
+            unrealized = trade.entry - current_price
+
+        unrealized_r = unrealized / trade.sl_distance
+
+        return unrealized_r >= trade.be_threshold
+
+    def increment_open_count(self, strategy_type: str) -> None:
+        """Track concurrent open positions per strategy."""
+        if strategy_type == "scalp":
+            self._open_scalp_count += 1
+        elif strategy_type == "trend":
+            self._open_trend_count += 1

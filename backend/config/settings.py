@@ -60,10 +60,10 @@ FETCH_START = {
 
 # ── ICT Strategy Parameters ──────────────────────────────────
 SWING_LOOKBACK  = 2
-CISD_BODY_MULT  = 1.5
-CISD_VOL_MULT   = 1.3
+CISD_BODY_MULT  = 2.0      # was 1.5 — require 2x+ avg body for true ICT displacement
+CISD_VOL_MULT   = 1.5      # was 1.3 — require higher volume on CISD candles
 CISD_LOOKBACK   = 20
-PATTERN_WINDOW  = 30   # AUDIT FIX BUG#10: increased from 20 → 30 (more time for Swing→CISD→FVG)
+PATTERN_WINDOW  = 15       # was 30 — max 15 candles (3.75h on 15m) for Swing→CISD→FVG
 FVG_CANDLES     = 2
 
 # ── Risk Management ──────────────────────────────────────────
@@ -71,13 +71,13 @@ INITIAL_CAPITAL    = 10_000.0
 
 # FIX: Reduced from 10% to 1% — professional standard
 # 10% risk per trade is reckless; 0.5-2% is industry standard
-RISK_PCT           = 0.02      # 2% risk per trade for $20 demo account
+RISK_PCT           = 0.01      # was 0.02 — 1% risk per trade (professional standard)
 
-REWARD_RATIO       = 2.0       # 1:2 minimum R:R
+REWARD_RATIO       = 3.0       # 1:3 minimum R:R (legacy default, overridden per strategy)
 COOLDOWN_MINUTES   = 5
-MAX_OPEN_TRADES    = 1
+MAX_OPEN_TRADES    = 3         # was 1 — allow concurrent scalp + trend
 MAX_NOTIONAL_MULT  = 10.0
-DEFAULT_LEVERAGE   = 5         # Binance Futures leverage (20x default)
+DEFAULT_LEVERAGE   = 3         # was 5 — reduce leverage until win rate is proven
 
 # FIX: Minimum SL distance as % of price
 # Prevents degenerate signals with near-zero SL (causes position size explosion)
@@ -90,8 +90,40 @@ FEE_PCT            = 0.0006    # 0.06% taker fee per side (Bybit standard)
 ROUND_TRIP_COST    = (SLIPPAGE_PCT + FEE_PCT) * 2   # both sides
 
 # FIX: Equity protection rules
-MAX_DRAWDOWN_STOP  = 0.50      # Stop trading if drawdown exceeds 50%
-MAX_DAILY_LOSS_PCT = 0.40      # Stop trading for the day after 40% daily loss
+MAX_DRAWDOWN_STOP  = 0.15      # was 0.50 — halt at 15% drawdown (need 17.6% to recover)
+MAX_DAILY_LOSS_PCT = 0.05      # was 0.40 — stop the day at 5% loss
+
+# ── Dual-Strategy Configuration ──────────────────────────────
+# Scalp Strategy (1R — short reaction trades)
+SCALP_RR              = 1.0       # 1:1 risk:reward
+SCALP_RISK_PCT        = 0.005     # 0.5% risk per scalp trade (half of trend)
+SCALP_BE_THRESHOLD    = 0.5       # move SL to breakeven at 0.5R profit
+SCALP_QUALITY_MIN     = 0.40      # lower quality bar → more trades
+SCALP_MAX_CONCURRENT  = 2         # up to 2 simultaneous scalp positions
+SCALP_COOLDOWN_MIN    = 3         # minutes between scalp entries
+
+# Trend Strategy (2R — continuation trades)
+TREND_RR              = 2.0       # 1:2 risk:reward
+TREND_RISK_PCT        = 0.01      # 1% risk per trend trade
+TREND_BE_THRESHOLD    = 1.0       # move SL to breakeven at 1R profit
+TREND_QUALITY_MIN     = 0.50      # higher quality bar → fewer, better trades
+TREND_MAX_CONCURRENT  = 1         # max 1 trend position at a time
+TREND_COOLDOWN_MIN    = 10        # minutes between trend entries
+
+# ── Market Regime Detection Thresholds ───────────────────────
+REGIME_ADX_TRENDING   = 25        # ADX above this = trending
+REGIME_ADX_RANGING    = 20        # ADX below this = ranging
+REGIME_VOL_HIGH       = 0.75      # ATR/vol percentile above = high volatility
+REGIME_VOL_LOW        = 0.25      # ATR/vol percentile below = low volatility
+REGIME_EMA_SLOPE_MIN  = 0.0005    # EMA8 slope threshold for trend confirmation
+REGIME_LOOKBACK       = 20        # candles to evaluate for HH/HL structure
+
+# ── Ensemble Model Configuration ─────────────────────────────
+ENSEMBLE_WEIGHTS = {
+    "xgboost":             0.50,
+    "random_forest":       0.30,
+    "logistic_regression": 0.20,
+}
 
 # ── Trade Labeling ───────────────────────────────────────────
 LABEL_FORWARD  = {
@@ -107,7 +139,11 @@ LABEL_LOSS     = 0
 MODEL_PATH    = MODEL_DIR / "ict_model.pkl"
 FEATURES_PATH = MODEL_DIR / "features.pkl"
 SCALER_PATH   = MODEL_DIR / "scaler.pkl"
-MIN_CONFIDENCE = 0.20
+MIN_CONFIDENCE = 0.50          # was 0.60 — require 52% model confidence (coin flip = 0.50)
+
+# Per-strategy model paths (used by ensemble gate)
+SCALP_MODEL_DIR  = MODEL_DIR   # scalp models: scalp_ensemble_{tf}.pkl
+TREND_MODEL_DIR  = MODEL_DIR   # trend models: trend_ensemble_{tf}.pkl
 
 # ── XGBoost Hyperparameters ───────────────────────────────────
 # FIX: Renamed from LGBM_PARAMS. Now uses XGBoost-compatible keys.
@@ -127,6 +163,13 @@ XGBOOST_PARAMS = {
 }
 XGBOOST_EARLY_STOPPING = 20
 TRAIN_SPLIT             = 0.80
+
+# ── Signal Quality Gate Constants (Task 4) ────────────────────
+# Minimum conditions for any trade to be considered
+MIN_VOLUME_RATIO     = 1.1     # volume must be 10% above 20-period average
+MIN_ATR_PERCENTILE   = 0.30    # market must have some volatility present
+MIN_ADX              = 20      # some trend must exist
+MIN_HTF_CONFLUENCE   = 1       # at least one HTF timeframe must agree
 
 # ── API ───────────────────────────────────────────────────────
 API_HOST         = "0.0.0.0"
