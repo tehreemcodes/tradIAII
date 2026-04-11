@@ -511,3 +511,4 @@ class BinanceFuturesExecutor:
         except Exception as e:
             logger.error(f"get_closed_pnl failed: {e}")
             return []
+TradeExecutor = BinanceFuturesExecutor
