@@ -417,7 +417,7 @@ def get_live_signal(
     risk_amount   = 0.0
     position_size = 0.0
 
-    if signal != "NO TRADE" and sl is not None:
+    if signal != "NO TRADE" and sl is not None and executable:
         rm    = RiskManager(initial_capital=capital, compound=True)
         trade = rm.calculate_position(
             entry=entry,

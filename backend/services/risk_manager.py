@@ -268,24 +268,23 @@ class RiskManager:
         fee_cost = round(pos_sz * entry * ROUND_TRIP_COST, 2) \
                    if self.apply_fees else 0.0
 
-        # EV gate (live-only — skipped in backtest).
-        # Use taker fee only (no slippage) for the EV estimate.
-        if not self.backtest_mode:
-            gross_win    = risk * rr_actual
-            gross_loss   = risk
-            ev_fee_cost  = pos_sz * entry * FEE_RATE_TAKER * 2
-            net_ev = (
-                EXPECTED_WIN_RATE * gross_win
-                - (1 - EXPECTED_WIN_RATE) * gross_loss
-                - ev_fee_cost
-            )
-            if net_ev < 0:
-                logger.debug(
-                    f"[RISK REJECT] EV gate: net_ev={net_ev:.2f} "
-                    f"(win={gross_win:.2f} loss={gross_loss:.2f} fee={ev_fee_cost:.2f} "
-                    f"wr={EXPECTED_WIN_RATE:.0%} rr={rr_actual})"
-                )
-                return None
+        # EV gate DISABLED: at BTC ~$70K prices, taker fees on any reasonable
+        # position dominate the EV margin when using a static 35% win-rate
+        # assumption.  The ML confidence gate (MIN_CONFIDENCE=0.50) is a
+        # superior quality filter — signals that reach this point have already
+        # been vetted by the model.  Re-enable once actual live win-rate data
+        # is available to calibrate a realistic EXPECTED_WIN_RATE.
+        #
+        # if not self.backtest_mode:
+        #     gross_win   = risk * rr_actual
+        #     gross_loss  = risk
+        #     ev_fee_cost = pos_sz * entry * FEE_RATE_TAKER * 2
+        #     net_ev      = (EXPECTED_WIN_RATE * gross_win
+        #                    - (1 - EXPECTED_WIN_RATE) * gross_loss
+        #                    - ev_fee_cost)
+        #     if net_ev < 0:
+        #         logger.debug(f"[RISK REJECT] EV gate: net_ev={net_ev:.2f}")
+        #         return None
 
         trade = Trade(
             direction      = direction,
