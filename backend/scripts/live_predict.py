@@ -281,7 +281,7 @@ def get_live_signal(
     # Each TF uses higher timeframes for structural bias:
     #   15m → 1h + 4h,  1h → 4h + 1d,  4h → 1d,  1d → none
     HTF_BY_SIGNAL_TF = {
-        "15m": ["1h", "4h"],
+        "15m": ["1h", "4h", "1d"],
         "1h":  HTF_LIST,      # default: ["4h", "1d"]
         "4h":  ["1d"],
         "1d":  [],

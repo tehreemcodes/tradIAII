@@ -88,10 +88,10 @@ def main(timeframe):
     # 3. HTF merge
     logger.info("[3/6] Merging HTF bias...")
     htf_map = {
-        "15m": ["1h", "4h"],
-        "1h": ["4h", "1d"],
-        "4h": ["1d"],
-        "1d": []
+        "15m": ["1h", "4h", "1d"],
+        "1h":  ["4h", "1d"],
+        "4h":  ["1d"],
+        "1d":  [],
     }
 
     htf = {tf: data[tf] for tf in htf_map.get(timeframe, []) if tf in data}

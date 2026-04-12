@@ -139,7 +139,7 @@ LABEL_LOSS     = 0
 MODEL_PATH    = MODEL_DIR / f"ict_model_{SIGNAL_TF}.pkl"   # ict_model_15m.pkl
 FEATURES_PATH = MODEL_DIR / f"features_{SIGNAL_TF}.pkl"   # features_15m.pkl
 SCALER_PATH   = MODEL_DIR / f"scaler_{SIGNAL_TF}.pkl"     # scaler_15m.pkl
-MIN_CONFIDENCE = 0.35          # was 0.50 — lowered for diagnosis; model confidence threshold
+MIN_CONFIDENCE = 0.50          # 0.50 → class-1 recall ≥ 0.53, precision 0.44, AUC 0.73
 
 # Per-strategy model paths (used by ensemble gate)
 SCALP_MODEL_DIR  = MODEL_DIR   # scalp models: scalp_ensemble_{tf}.pkl
