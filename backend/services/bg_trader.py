@@ -139,7 +139,10 @@ async def start_bg_trader():
                 
                 if candle_ts and candle_ts != last_signal_ts:
                     logger.info(f"[BG_TRADER] Signal: {signal.get('signal')} | Confidence: {signal.get('confidence', 0):.4f} | Executable: {signal.get('executable')} | Reason: {signal.get('reject_reason')} | Candle: {candle_ts}")
-                    
+                    # Mark this candle as seen regardless of whether we trade it,
+                    # so we never re-process the same candle on the next loop iteration.
+                    last_signal_ts = candle_ts
+
                     if signal.get("signal") not in ["NO TRADE", None] and signal.get("executable", False) and signal.get("sl") is not None:
                         # ── Step 3: Iterate Over Users and Execute ───────────
                         for sid, session_data in active_enabled_sessions.items():
@@ -206,8 +209,6 @@ async def start_bg_trader():
                             except Exception as e:
                                 logger.error(f"[BG_TRADER] Error processing signal for session {sid[:8]}: {e}")
                                 
-                        last_signal_ts = candle_ts
-
         except asyncio.CancelledError:
             logger.info("[BG_TRADER] Background trader cancelled.")
             break

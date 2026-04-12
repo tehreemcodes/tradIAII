@@ -49,7 +49,7 @@ interface Stats {
 
 const API_BASE         = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 const POLL_IDLE_MS     = 5 * 60 * 1000   // refresh every 5 min when idle
-const POLL_RUNNING_MS  = 5 * 1000        // poll every 5s while backtest runs
+const POLL_RUNNING_MS  = 15 * 1000       // poll every 15s while backtest runs (min 15s)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

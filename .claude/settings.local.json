@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m backend.scripts.backtest --no-model)",
+      "Bash(python -c \"from backend.config.settings import MODEL_PATH, FEATURES_PATH, SCALER_PATH; print\\(MODEL_PATH, MODEL_PATH.exists\\(\\)\\); print\\(FEATURES_PATH, FEATURES_PATH.exists\\(\\)\\); print\\(SCALER_PATH, SCALER_PATH.exists\\(\\)\\)\")",
+      "Bash(python -m backend.scripts.backtest)",
+      "Bash(python -c ':*)",
+      "Bash(python -)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)\\)\")"
+    ]
+  }
+}

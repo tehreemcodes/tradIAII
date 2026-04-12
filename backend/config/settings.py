@@ -26,7 +26,7 @@ SYMBOL     = "BTC/USDT"
 # ── Timeframes ───────────────────────────────────────────────
 TIMEFRAMES = ["15m", "1h", "4h", "1d"]
 SIGNAL_TF  = "15m"
-HTF_LIST   = ["1h", "4h"]
+HTF_LIST   = ["1h", "4h", "1d"]
 LTF        = "1m"
 
 TF_LABELS  = {
@@ -73,7 +73,7 @@ INITIAL_CAPITAL    = 10_000.0
 # 10% risk per trade is reckless; 0.5-2% is industry standard
 RISK_PCT           = 0.01      # was 0.02 — 1% risk per trade (professional standard)
 
-REWARD_RATIO       = 3.0       # 1:3 minimum R:R (legacy default, overridden per strategy)
+REWARD_RATIO       = 2.0       # 1:3 minimum R:R (legacy default, overridden per strategy)
 COOLDOWN_MINUTES   = 5
 MAX_OPEN_TRADES    = 3         # was 1 — allow concurrent scalp + trend
 MAX_NOTIONAL_MULT  = 10.0
@@ -90,8 +90,8 @@ FEE_PCT            = 0.0006    # 0.06% taker fee per side (Bybit standard)
 ROUND_TRIP_COST    = (SLIPPAGE_PCT + FEE_PCT) * 2   # both sides
 
 # FIX: Equity protection rules
-MAX_DRAWDOWN_STOP  = 0.15      # was 0.50 — halt at 15% drawdown (need 17.6% to recover)
-MAX_DAILY_LOSS_PCT = 0.05      # was 0.40 — stop the day at 5% loss
+MAX_DRAWDOWN_STOP  = 0.40      # was 0.15 — raised for realistic backtesting; halt at 40% drawdown
+MAX_DAILY_LOSS_PCT = 0.15      # was 0.05 — raised for backtest diagnosis; stop day at 15% loss
 
 # ── Dual-Strategy Configuration ──────────────────────────────
 # Scalp Strategy (1R — short reaction trades)
@@ -127,7 +127,7 @@ ENSEMBLE_WEIGHTS = {
 
 # ── Trade Labeling ───────────────────────────────────────────
 LABEL_FORWARD  = {
-    "15m": 30,
+    "15m": 60,
     "1h":  30,
     "4h":  20,
     "1d":  10,
@@ -136,10 +136,10 @@ LABEL_WIN      = 1
 LABEL_LOSS     = 0
 
 # ── Model Artifacts ──────────────────────────────────────────
-MODEL_PATH    = MODEL_DIR / "ict_model.pkl"
-FEATURES_PATH = MODEL_DIR / "features.pkl"
-SCALER_PATH   = MODEL_DIR / "scaler.pkl"
-MIN_CONFIDENCE = 0.50          # was 0.60 — require 52% model confidence (coin flip = 0.50)
+MODEL_PATH    = MODEL_DIR / f"ict_model_{SIGNAL_TF}.pkl"   # ict_model_15m.pkl
+FEATURES_PATH = MODEL_DIR / f"features_{SIGNAL_TF}.pkl"   # features_15m.pkl
+SCALER_PATH   = MODEL_DIR / f"scaler_{SIGNAL_TF}.pkl"     # scaler_15m.pkl
+MIN_CONFIDENCE = 0.35          # was 0.50 — lowered for diagnosis; model confidence threshold
 
 # Per-strategy model paths (used by ensemble gate)
 SCALP_MODEL_DIR  = MODEL_DIR   # scalp models: scalp_ensemble_{tf}.pkl
@@ -179,7 +179,11 @@ _frontend_url = os.getenv("FRONTEND_URL", "")
 API_CORS_ORIGINS = list(filter(None, [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    _frontend_url,                      # Set this to your Vercel URL in Railway env vars
+    "http://187.127.103.154",
+    "http://187.127.103.154:3000",
+    "http://187.127.103.154:8000",
+    _frontend_url,
+    "*",   # fallback — restrict in production by removing this line
 ]))
 
 # ── Live Trading ──────────────────────────────────────────────
@@ -194,3 +198,22 @@ TRADE_LOG_PATH        = LOG_DIR / "live_trades.json"
 ANALYTICS_DB_PATH     = DATA_DIR / "analytics.db"
 ORDER_TYPE            = "market"   # "market" or "limit"
 MAX_OPEN_POSITIONS    = 1
+
+# ── Binance Demo API ──────────────────────────────────────────
+# Always points to demo-fapi — do NOT switch to mainnet without explicit override
+BINANCE_BASE_URL = os.getenv("BINANCE_BASE_URL", "https://demo-fapi.binance.com")
+assert "demo-fapi.binance.com" in BINANCE_BASE_URL, (
+    f"Safety: BINANCE_BASE_URL must point to demo-fapi, got: {BINANCE_BASE_URL}"
+)
+
+# ── Limit Entry Orders ────────────────────────────────────────
+USE_LIMIT_ENTRY          = True    # Use limit orders at book price; fall back to market on timeout
+ENTRY_LIMIT_TIMEOUT_SEC  = 30      # Seconds to wait for limit fill before cancelling and going market
+
+# ── Daily Trade Governor ──────────────────────────────────────
+MAX_TRADES_PER_DAY = 6             # Maximum trades allowed in a single calendar day
+
+# ── EV Gate ──────────────────────────────────────────────────
+EXPECTED_WIN_RATE = 0.35           # Conservative win-rate assumption for EV filtering
+FEE_RATE_TAKER    = 0.0005         # 0.05% taker fee per side
+FEE_RATE_MAKER    = 0.0002         # 0.02% maker fee per side

@@ -36,6 +36,9 @@ from backend.config.settings import (
     MAX_DRAWDOWN_STOP,
     MAX_DAILY_LOSS_PCT,
     SL_BUFFER_PCT,
+    MAX_TRADES_PER_DAY,
+    EXPECTED_WIN_RATE,
+    FEE_RATE_TAKER,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +76,7 @@ class RiskManager:
         cooldown_minutes: int   = COOLDOWN_MINUTES,
         compound:         bool  = False,
         apply_fees:       bool  = True,
+        backtest_mode:    bool  = False,
     ):
         self.initial_capital  = initial_capital
         self.capital          = initial_capital
@@ -82,6 +86,7 @@ class RiskManager:
         self.cooldown_minutes = cooldown_minutes
         self.compound         = compound
         self.apply_fees       = apply_fees
+        self.backtest_mode    = backtest_mode   # skips live-only filters (EV gate, daily governor)
         self.trade_log:       list[Trade]             = []
         self.last_signal_ts:  Optional[pd.Timestamp]  = None
 
@@ -93,6 +98,13 @@ class RiskManager:
         # Per-strategy concurrent trade tracking
         self._open_scalp_count: int = 0
         self._open_trend_count: int = 0
+
+        # Daily trade governor
+        self.trades_today:      int                       = 0
+        self._last_reset_date:  Optional[pd.Timestamp]   = None
+
+        # Fee accumulation
+        self.total_fees_paid:   float = 0.0
 
     # ── Properties ───────────────────────────────────────────
 
@@ -189,34 +201,53 @@ class RiskManager:
         """
         allowed, reason = self.can_trade(ts)
         if not allowed:
+            logger.debug(f"[RISK REJECT] can_trade blocked: {reason}")
             return None
+
+        # Daily trade governor (live-only — skipped in backtest)
+        if not self.backtest_mode:
+            today = ts.normalize()
+            if self._last_reset_date != today:
+                self.trades_today      = 0
+                self._last_reset_date  = today
+            if self.trades_today >= MAX_TRADES_PER_DAY:
+                logger.debug(f"[RISK REJECT] daily trade limit ({self.trades_today}/{MAX_TRADES_PER_DAY})")
+                return None
 
         # Per-strategy concurrent trade check
         from backend.config.settings import SCALP_MAX_CONCURRENT, TREND_MAX_CONCURRENT
         if strategy_type == "scalp" and self._open_scalp_count >= SCALP_MAX_CONCURRENT:
+            logger.debug(f"[RISK REJECT] scalp concurrent limit ({self._open_scalp_count}/{SCALP_MAX_CONCURRENT})")
             return None
         if strategy_type == "trend" and self._open_trend_count >= TREND_MAX_CONCURRENT:
+            logger.debug(f"[RISK REJECT] trend concurrent limit ({self._open_trend_count}/{TREND_MAX_CONCURRENT})")
             return None
 
         # SL direction validation
-        if direction == "BUY"  and sl >= entry: return None
-        if direction == "SELL" and sl <= entry: return None
+        if direction == "BUY"  and sl >= entry:
+            logger.debug(f"[RISK REJECT] SL {sl} >= entry {entry} for BUY")
+            return None
+        if direction == "SELL" and sl <= entry:
+            logger.debug(f"[RISK REJECT] SL {sl} <= entry {entry} for SELL")
+            return None
+
+        # Apply SL buffer first
+        if direction == "BUY":
+            sl = sl * (1 - SL_BUFFER_PCT)   # push SL slightly lower
+        else:
+            sl = sl * (1 + SL_BUFFER_PCT)   # push SL slightly higher
 
         sl_dist = abs(entry - sl)
 
         # Reject near-zero SL (floating point or data error)
         if sl_dist < 1e-8:
+            logger.debug(f"[RISK REJECT] near-zero SL distance: {sl_dist}")
             return None
 
         # Reject SL too close to entry (not a structural stop)
         if sl_dist < entry * MIN_SL_PCT:
+            logger.debug(f"[RISK REJECT] SL dist {sl_dist:.4f} < MIN_SL_PCT {entry*MIN_SL_PCT:.4f}")
             return None
-        
-        if direction == "BUY":
-            sl = sl * (1 - SL_BUFFER_PCT)   # push SL slightly lower
-        else:
-            sl = sl * (1 + SL_BUFFER_PCT)   # push SL slightly higher
-        sl_dist = abs(entry - sl)           # recalculate with buffered SL
 
         risk_pct_actual = risk_pct_override if risk_pct_override else self.risk_pct
         base = self.capital if self.compound else self.initial_capital
@@ -237,7 +268,26 @@ class RiskManager:
         fee_cost = round(pos_sz * entry * ROUND_TRIP_COST, 2) \
                    if self.apply_fees else 0.0
 
-        return Trade(
+        # EV gate (live-only — skipped in backtest).
+        # Use taker fee only (no slippage) for the EV estimate.
+        if not self.backtest_mode:
+            gross_win    = risk * rr_actual
+            gross_loss   = risk
+            ev_fee_cost  = pos_sz * entry * FEE_RATE_TAKER * 2
+            net_ev = (
+                EXPECTED_WIN_RATE * gross_win
+                - (1 - EXPECTED_WIN_RATE) * gross_loss
+                - ev_fee_cost
+            )
+            if net_ev < 0:
+                logger.debug(
+                    f"[RISK REJECT] EV gate: net_ev={net_ev:.2f} "
+                    f"(win={gross_win:.2f} loss={gross_loss:.2f} fee={ev_fee_cost:.2f} "
+                    f"wr={EXPECTED_WIN_RATE:.0%} rr={rr_actual})"
+                )
+                return None
+
+        trade = Trade(
             direction      = direction,
             entry          = round(entry, 4),
             sl             = round(sl, 4),
@@ -254,6 +304,15 @@ class RiskManager:
             rr_used        = rr_actual,
         )
 
+        # auto-incremented here; decremented in record_outcome()
+        if strategy_type == "scalp":
+            self._open_scalp_count += 1
+        elif strategy_type == "trend":
+            self._open_trend_count += 1
+
+        self.trades_today += 1
+        return trade
+
     # ── Outcome Recording ────────────────────────────────────
 
     def record_outcome(self, trade: Trade, outcome: str) -> Trade:
@@ -266,9 +325,10 @@ class RiskManager:
         # Deduct fees from both winning and losing trades
         net_pnl = gross_pnl - trade.fee_cost
 
-        self.capital        = max(0.0, self.capital + net_pnl)
-        self.peak_capital   = max(self.peak_capital, self.capital)
-        self.last_signal_ts = trade.timestamp
+        self.capital          = max(0.0, self.capital + net_pnl)
+        self.peak_capital     = max(self.peak_capital, self.capital)
+        self.last_signal_ts   = trade.timestamp
+        self.total_fees_paid += trade.fee_cost
 
         trade.outcome      = outcome
         trade.pnl          = round(net_pnl, 2)
@@ -331,6 +391,7 @@ class RiskManager:
             "profit_factor":      round(tp_pnl / sl_pnl, 2) if sl_pnl > 0 else 0,
             "total_fees_paid":    round(total_fees, 2),
             "trades_halted":      self._halted,
+            "trades_today":       self.trades_today,
         }
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -361,10 +422,4 @@ class RiskManager:
         unrealized_r = unrealized / trade.sl_distance
 
         return unrealized_r >= trade.be_threshold
-
-    def increment_open_count(self, strategy_type: str) -> None:
-        """Track concurrent open positions per strategy."""
-        if strategy_type == "scalp":
-            self._open_scalp_count += 1
-        elif strategy_type == "trend":
-            self._open_trend_count += 1
+

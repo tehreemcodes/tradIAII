@@ -1,0 +1,51 @@
+Total candles: 146819
+Date range: 2022-01-01 00:00:00 to 2026-03-14 12:30:00
+Total signals: 4777
+Signal rate: 3.25%
+BUY signals:  2293
+SELL signals: 2484
+
+Avg ADX at signal: 37.4
+Avg ATR percentile: 0.59
+In killzone: 34.8%
+
+SL validity check:
+  Signals with missing SL: 0
+  Signals with SL == 0:    0
+  Signals with valid SL:   4777
+
+HTF bias at BUY signals:
+  h4_bias mean:  0.12
+  d1_bias mean:  0.00
+  htf_bull_confluence mean: 1.08
+
+HTF bias at SELL signals:
+  h4_bias mean:  -0.03
+  d1_bias mean:  0.00
+  htf_bear_confluence mean: 1.02
+
+Regime at signal time:
+  regime_class distribution:
+regime_class
+3.0    3186
+1.0    1441
+2.0     107
+0.0      43
+
+First 5 signals:
+                     signal     close  signal_sl  h4_bias  d1_bias     adx_14  is_optimal_window
+timestamp                                                                                       
+2022-01-01 05:30:00       2  47312.43   46629.43     -1.0        0  44.828765                  0
+2022-01-01 17:45:00       2  47750.15   46851.37     -1.0        0  45.671157                  0
+2022-01-02 00:45:00       2  47641.02   47293.36     -1.0        0  26.580944                  0
+2022-01-02 05:00:00       0  46870.25   47456.28      1.0        0  39.787862                  0
+2022-01-02 12:15:00       0  47156.53   47383.89      1.0        0  20.170788                  1
+
+Last 5 signals:
+                     signal    close  signal_sl  h4_bias  d1_bias     adx_14  is_optimal_window
+timestamp                                                                                      
+2026-03-12 23:15:00       2  70536.6    70013.9     -1.0        0  21.097751                  0
+2026-03-13 00:15:00       2  71487.8    70391.5     -1.0        0  39.866329                  0
+2026-03-13 08:45:00       2  71829.4    71378.1     -1.0        0  22.874918                  1
+2026-03-13 10:15:00       2  72360.8    71593.0     -1.0        0  37.795287                  0
+2026-03-13 13:00:00       2  72797.1    72201.1     -1.0        0  47.629244                  1

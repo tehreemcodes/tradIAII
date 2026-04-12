@@ -30,15 +30,18 @@ import asyncio
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.config.settings import (
     MODEL_PATH, FEATURES_PATH, SCALER_PATH,
     SIGNAL_TF, HTF_LIST, INITIAL_CAPITAL, RISK_PCT,
     REWARD_RATIO, MIN_CONFIDENCE, LOG_DIR,
-    API_CORS_ORIGINS,
+    API_CORS_ORIGINS, BINANCE_BASE_URL, MAX_TRADES_PER_DAY,
 )
 from backend.config.logging_setup import setup_logging
+from backend.utils.serialization import to_json_safe
 
 
 
@@ -69,6 +72,19 @@ app.include_router(trade_router)
 
 from backend.api.exchange_routes import router as exchange_router
 app.include_router(exchange_router)
+
+# ── Static files (dashboard) ──────────────────────────────────────────────────
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+if _STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+@app.get("/dashboard", include_in_schema=False)
+def dashboard():
+    """Serve the production dashboard HTML."""
+    p = _STATIC_DIR / "dashboard.html"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="dashboard.html not found")
+    return FileResponse(str(p))
 
 # ── Backtest state (thread-safe) ──────────────────────────────────────────────
 # Tracks whether a background backtest is currently running.
@@ -542,7 +558,7 @@ def get_zones():
                         "filled":    current < bot or current > top,
                     })
 
-        return {"zones": zones[-20:], "count": len(zones)}
+        return to_json_safe({"zones": zones[-20:], "count": len(zones)})
 
     except Exception as e:
         logger.exception("get_zones failed")
@@ -558,7 +574,7 @@ def model_info():
     import joblib
     features = joblib.load(FEATURES_PATH) if FEATURES_PATH.exists() else []
 
-    return {
+    return to_json_safe({
         "signal_timeframe": SIGNAL_TF,
         "htf_timeframes":   HTF_LIST,
         "feature_count":    len(features),
@@ -567,7 +583,7 @@ def model_info():
         "reward_ratio":     REWARD_RATIO,
         "initial_capital":  INITIAL_CAPITAL,
         "min_confidence":   MIN_CONFIDENCE,
-    }
+    })
 
 
 @app.post("/api/model/reload")
@@ -624,7 +640,7 @@ def get_regime():
         detector = MarketRegimeDetector()
         result = detector.classify(df)
 
-        return {
+        return to_json_safe({
             "regime":          result.regime.value,
             "strategy_type":   result.strategy_type,
             "confidence":      round(result.confidence, 4),
@@ -633,7 +649,7 @@ def get_regime():
             "trend_strength":  round(result.trend_strength, 4),
             "structure_score": round(result.structure_score, 4),
             "reason":          result.reason,
-        }
+        })
     except Exception as e:
         logger.exception("get_regime failed")
         raise HTTPException(status_code=500, detail=str(e))
@@ -662,7 +678,7 @@ def get_stats():
         try:
             with open(summary_path) as f:
                 s = json.load(f)
-            return {
+            return to_json_safe({
                 "total_signals":    s.get("total_trades",    373),
                 "wins":             s.get("wins",            242),
                 "losses":           s.get("losses",          131),
@@ -676,12 +692,12 @@ def get_stats():
                 "last_updated":     None,
                 "backtest_running": False,
                 "monte_carlo":      None,
-            }
+            })
         except Exception:
             pass
 
     # AUDIT FIX BUG#12: Return honest zeros instead of hardcoded fake data
-    return {
+    return to_json_safe({
         "total_signals":    0,
         "wins":             0,
         "losses":           0,
@@ -695,47 +711,128 @@ def get_stats():
         "last_updated":     None,
         "backtest_running": False,
         "monte_carlo":      None,
-    }
+    })
 
 @app.get("/api/status/live")
 def get_live_status(x_session_id: Optional[str] = Header(None)):
-    import backend.config.settings as settings
+    import backend.config.settings as cfg
     from backend.api.exchange_routes import _active_sessions
     from backend.scripts.live_predict import get_live_signal
     from backend.api.trade_routes import _tracker
-    
+
+    # -- Exchange / session info ------------------------------------------
     connected = False
-    
+    executor  = None
     if x_session_id and x_session_id in _active_sessions:
-        session = _active_sessions[x_session_id]
+        session  = _active_sessions[x_session_id]
         executor = session.get("executor")
         if executor:
             connected = executor.connected
 
-    stats = _tracker.get_stats()
-    
+    balance  = 0.0
+    leverage = cfg.DEFAULT_LEVERAGE
+    if executor and connected:
+        try:
+            balance  = executor.get_balance()
+            acct     = executor.get_account_info()
+            leverage = acct.get("leverage", cfg.DEFAULT_LEVERAGE)
+        except Exception:
+            pass
+
+    # -- Open position ---------------------------------------------------
+    open_position = None
+    if executor and connected:
+        try:
+            positions = executor.get_open_positions()
+            if positions:
+                p = positions[0]
+                open_position = {
+                    "side":              p.get("side"),
+                    "size":              p.get("size"),
+                    "entry_price":       p.get("entry_price"),
+                    "mark_price":        p.get("mark_price"),
+                    "unrealised_pnl":    p.get("unrealised_pnl"),
+                    "liquidation_price": p.get("liquidation_price"),
+                    "leverage":          p.get("leverage"),
+                }
+        except Exception:
+            pass
+
+    # -- Session stats ---------------------------------------------------
+    stats        = _tracker.get_stats()
+    daily_pnl    = 0.0
+    try:
+        daily_pnl = _tracker.get_daily_pnl()
+    except Exception:
+        pass
+
+    # -- Live signal (best-effort) ----------------------------------------
     sig = None
     try:
-        # Pass capital to get_live_signal if available
-        capital = stats.get("running_capital", settings.INITIAL_CAPITAL)
-        sig = get_live_signal(capital=capital, timeframe=settings.SIGNAL_TF)
+        capital = balance if balance > 0 else cfg.INITIAL_CAPITAL
+        sig     = get_live_signal(capital=capital, timeframe=cfg.SIGNAL_TF)
     except Exception as e:
         logger.error(f"Failed to fetch live signal for status: {e}")
 
-    return {
-        "exchange_connected": connected,
-        "paper_mode": settings.PAPER_MODE,
-        "active_timeframe": settings.SIGNAL_TF,
-        "last_signal": sig,
-        "total_pnl": stats.get("total_pnl", 0.0),
-        "win_rate_pct": stats.get("win_rate_pct", 0.0),
-        "running_capital": stats.get("running_capital", settings.INITIAL_CAPITAL),
-        "max_drawdown_pct": stats.get("max_drawdown_pct", 0.0),
-        "today_pnl": stats.get("total_pnl", 0.0),
-        "daily_drawdown_pct": stats.get("max_drawdown_pct", 0.0),
-        "regime": sig.get("regime", "UNKNOWN") if sig else "UNKNOWN",
-        "strategy_type": sig.get("strategy_type", "none") if sig else "none",
+    result = {
+        "timestamp":   datetime.now(timezone.utc).isoformat(),
+        "bot_running": True,
+        "paper_mode":  cfg.PAPER_MODE,
+
+        "current_signal": {
+            "signal":        sig.get("signal", "NO TRADE") if sig else "NO TRADE",
+            "strategy_type": sig.get("strategy_type", "none") if sig else "none",
+            "regime":        sig.get("regime", "UNKNOWN") if sig else "UNKNOWN",
+            "confidence":    sig.get("confidence", 0.0) if sig else 0.0,
+            "executable":    sig.get("executable", False) if sig else False,
+            "reject_reason": sig.get("reject_reason") if sig else None,
+            "entry":         sig.get("entry") if sig else None,
+            "sl":            sig.get("sl") if sig else None,
+            "tp":            sig.get("tp") if sig else None,
+            "rr":            sig.get("rr", "1:2") if sig else "1:2",
+            "candle_time":   sig.get("candle_time") if sig else None,
+            "htf_bias":      sig.get("htf_bias") if sig else None,
+        } if sig is not None else None,
+
+        "open_position": open_position,
+
+        "session": {
+            "wins":          stats.get("wins", 0),
+            "losses":        stats.get("losses", 0),
+            "total_trades":  stats.get("total_trades", 0),
+            "total_pnl":     stats.get("total_pnl", 0.0),
+            "win_rate_pct":  stats.get("win_rate_pct", 0.0),
+            "total_fees_paid": stats.get("total_fees_paid", 0.0),
+            "running_capital": stats.get("running_capital", cfg.INITIAL_CAPITAL),
+            "max_drawdown_pct": stats.get("max_drawdown_pct", 0.0),
+        },
+
+        "exchange": {
+            "connected":  connected,
+            "base_url":   BINANCE_BASE_URL,
+            "symbol":     cfg.SYMBOL,
+            "leverage":   leverage,
+            "balance":    round(balance, 2),
+        },
+
+        "risk": {
+            "daily_pnl":        round(daily_pnl, 2),
+            "max_trades_per_day": MAX_TRADES_PER_DAY,
+        },
     }
+
+    return to_json_safe(result)
+
+
+@app.get("/api/gate-status")
+def get_gate_status():
+    """
+    Return the last gate evaluation result from the strategy engine.
+    Updated every time /api/signal or the bg_trader calls evaluate().
+    No re-computation -- instant response.
+    """
+    from backend.services.strategy_engine import _last_gate_result
+    return to_json_safe(_last_gate_result)
 
 @app.post("/api/debug/connect")
 async def debug_connect(request: Request):

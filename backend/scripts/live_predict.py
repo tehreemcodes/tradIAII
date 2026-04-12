@@ -337,9 +337,10 @@ def get_live_signal(
         candle_ts  = sig_ts
         raw_signal = int(last["signal"])
 
-        tf_secs = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
-        max_age_secs = tf_secs.get(timeframe, 900) * 3
-        if (df.index[-1] - sig_ts).total_seconds() > max_age_secs:
+        # Strict stale check: signal must come from the most recent closed candle.
+        # Any signal older than 1 candle is stale and must not be traded.
+        last_closed_ts = df.index[-1]
+        if sig_ts < last_closed_ts:
             is_stale = True
 
         logger.info(
@@ -396,10 +397,10 @@ def get_live_signal(
     # Also run the legacy single model for comparison logging
     legacy_confidence = 0.0
     try:
-        avail   = [f for f in features if f in df.columns]
-        x_raw = df.loc[[sig_ts], avail].fillna(0)
-        x_sc  = pd.DataFrame(scaler.transform(x_raw), columns=avail)
-        proba    = model.predict_proba(x_sc)[0]
+        avail    = [f for f in features if f in df.columns]
+        x_raw    = df.loc[[sig_ts], avail].fillna(0)
+        x_scaled = scaler.transform(x_raw)          # pass numpy array -- avoids XGBoost DataFrame bug
+        proba    = model.predict_proba(x_scaled)[0]
         legacy_confidence = float(proba[1])
         logger.debug(f"Legacy model confidence: {legacy_confidence:.4f}")
     except Exception as e:

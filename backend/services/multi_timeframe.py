@@ -141,4 +141,21 @@ def merge_htf_into_ltf(
         f"Full bull: {df['full_bull_confluence'].sum():,}  "
         f"Full bear: {df['full_bear_confluence'].sum():,}"
     )
+
+    # ── d1_bias diagnostic: confirm real values were merged ───────────────────
+    for col in ["d1_bias", "h4_bias"]:
+        if col in df.columns:
+            s = df[col]
+            non_zero = int((s != 0).sum())
+            logger.info(
+                f"[MTF-diag] {col}: "
+                f"non-zero={non_zero:,} ({non_zero/max(len(df),1)*100:.1f}%)  "
+                f"mean={s.mean():.3f}  "
+                f"+1={(s == 1).sum():,}  "
+                f"-1={(s == -1).sum():,}  "
+                f"0={(s == 0).sum():,}"
+            )
+        else:
+            logger.warning(f"[MTF-diag] {col} NOT present after merge!")
+
     return df

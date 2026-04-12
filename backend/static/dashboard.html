@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TradIA — Live Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0d0f14;
+      --bg2:      #141720;
+      --bg3:      #1c2030;
+      --border:   #252a3a;
+      --text:     #d4daf0;
+      --muted:    #6b7499;
+      --green:    #1db978;
+      --red:      #e05050;
+      --yellow:   #e0a730;
+      --blue:     #4c8ef7;
+      --purple:   #9b6aff;
+      --radius:   8px;
+      --gap:      14px;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .logo {
+      font-size: 1.3rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      color: var(--blue);
+    }
+    .logo span { color: var(--purple); }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .badge {
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .badge-paper  { background: #2a2010; color: var(--yellow); border: 1px solid var(--yellow); }
+    .badge-live   { background: #102010; color: var(--green);  border: 1px solid var(--green);  }
+    .badge-disc   { background: #1a1020; color: var(--red);    border: 1px solid var(--red);    }
+    #refresh-info { color: var(--muted); font-size: 0.78rem; }
+    #countdown    { color: var(--text); font-weight: 600; }
+
+    /* ── Main grid ── */
+    main {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: var(--gap);
+      padding: var(--gap) 20px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .card-wide { grid-column: 1 / -1; }
+    .card-title {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--muted);
+    }
+
+    /* ── Stat grid inside cards ── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 10px;
+    }
+    .stat {
+      background: var(--bg3);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    .stat-label { font-size: 0.7rem; color: var(--muted); margin-bottom: 4px; }
+    .stat-value { font-size: 1.05rem; font-weight: 700; }
+    .up   { color: var(--green); }
+    .down { color: var(--red); }
+    .neu  { color: var(--text); }
+    .warn { color: var(--yellow); }
+    .info { color: var(--blue); }
+
+    /* ── Signal panel ── */
+    .signal-direction {
+      font-size: 2rem;
+      font-weight: 800;
+      letter-spacing: .05em;
+    }
+    .sig-buy  { color: var(--green); }
+    .sig-sell { color: var(--red); }
+    .sig-none { color: var(--muted); }
+
+    /* ── Gate row ── */
+    .gate-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .gate-chip {
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+    }
+    .gate-pass { border-color: var(--green); color: var(--green); }
+    .gate-kill { border-color: var(--red);   color: var(--red);   }
+    .gate-warn { border-color: var(--yellow); color: var(--yellow); }
+
+    /* ── Progress bar ── */
+    .progress-wrap { background: var(--bg3); border-radius: 4px; height: 8px; overflow: hidden; }
+    .progress-bar  { height: 100%; border-radius: 4px; transition: width .4s; }
+
+    /* ── Table ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th {
+      text-align: left;
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--bg3); }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center;
+      padding: 12px;
+      color: var(--muted);
+      font-size: 0.75rem;
+      border-top: 1px solid var(--border);
+      margin-top: 8px;
+    }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Confidence bar colours ── */
+    .conf-high { background: var(--green); }
+    .conf-med  { background: var(--yellow); }
+    .conf-low  { background: var(--red); }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">Trad<span>IA</span></div>
+  <div class="header-right">
+    <span id="mode-badge" class="badge badge-paper">Paper</span>
+    <span id="conn-badge" class="badge badge-disc">Disconnected</span>
+    <span id="refresh-info">Refreshing in <span id="countdown">15</span>s</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── Signal Panel ── -->
+  <div class="card">
+    <div class="card-title">Current Signal</div>
+    <div id="sig-direction" class="signal-direction sig-none">-- NO TRADE --</div>
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-label">Confidence</div><div id="sig-conf" class="stat-value neu">--</div></div>
+      <div class="stat"><div class="stat-label">Strategy</div><div id="sig-strat" class="stat-value neu">--</div></div>
+      <div class="stat"><div class="stat-label">Regime</div><div id="sig-regime" class="stat-value neu">--</div></div>
+      <div class="stat"><div class="stat-label">Candle</div><div id="sig-candle" class="stat-value neu" style="font-size:.8rem">--</div></div>
+    </div>
+    <div style="margin-top:4px">
+      <div class="stat-label" style="margin-bottom:6px">Confidence</div>
+      <div class="progress-wrap"><div id="conf-bar" class="progress-bar conf-low" style="width:0%"></div></div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-label">Entry</div><div id="sig-entry" class="stat-value neu">--</div></div>
+      <div class="stat"><div class="stat-label">Stop Loss</div><div id="sig-sl" class="stat-value down">--</div></div>
+      <div class="stat"><div class="stat-label">Take Profit</div><div id="sig-tp" class="stat-value up">--</div></div>
+      <div class="stat"><div class="stat-label">R:R</div><div id="sig-rr" class="stat-value neu">--</div></div>
+    </div>
+    <div id="sig-reject" style="color:var(--muted);font-size:.78rem;display:none"></div>
+    <div style="margin-top:2px">
+      <div class="stat-label" style="margin-bottom:4px">HTF Bias</div>
+      <div class="gate-row" id="htf-row"></div>
+    </div>
+  </div>
+
+  <!-- ── Open Position Panel ── -->
+  <div class="card">
+    <div class="card-title">Open Position</div>
+    <div id="pos-empty" style="color:var(--muted);padding:20px 0;text-align:center">No open position</div>
+    <div id="pos-data" style="display:none">
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-label">Side</div><div id="pos-side" class="stat-value neu">--</div></div>
+        <div class="stat"><div class="stat-label">Size</div><div id="pos-size" class="stat-value neu">--</div></div>
+        <div class="stat"><div class="stat-label">Entry</div><div id="pos-entry" class="stat-value neu">--</div></div>
+        <div class="stat"><div class="stat-label">Mark Price</div><div id="pos-mark" class="stat-value neu">--</div></div>
+        <div class="stat"><div class="stat-label">Unrealised PnL</div><div id="pos-pnl" class="stat-value neu">--</div></div>
+        <div class="stat"><div class="stat-label">Liq. Price</div><div id="pos-liq" class="stat-value warn">--</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Performance Panel ── -->
+  <div class="card">
+    <div class="card-title">Session Performance</div>
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-label">Total Trades</div><div id="perf-trades" class="stat-value neu">0</div></div>
+      <div class="stat"><div class="stat-label">Win Rate</div><div id="perf-wr" class="stat-value neu">0%</div></div>
+      <div class="stat"><div class="stat-label">Net PnL</div><div id="perf-pnl" class="stat-value neu">$0</div></div>
+      <div class="stat"><div class="stat-label">Fees Paid</div><div id="perf-fees" class="stat-value warn">$0</div></div>
+      <div class="stat"><div class="stat-label">Max Drawdown</div><div id="perf-dd" class="stat-value warn">0%</div></div>
+      <div class="stat"><div class="stat-label">Capital</div><div id="perf-cap" class="stat-value neu">--</div></div>
+    </div>
+    <div>
+      <div class="stat-label" style="margin-bottom:4px">Wins vs Losses</div>
+      <div class="progress-wrap" style="height:12px">
+        <div id="wr-bar" class="progress-bar" style="width:0%;background:var(--green)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:.75rem;color:var(--muted)">
+        <span id="perf-wins">0W</span>
+        <span id="perf-losses">0L</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Gate Diagnostic Panel ── -->
+  <div class="card">
+    <div class="card-title">Gate Diagnostics</div>
+    <div class="gate-row" id="gate-row">
+      <span class="gate-chip">Loading...</span>
+    </div>
+    <div style="margin-top:6px">
+      <div class="stat-label" style="margin-bottom:4px">Last Gate Result</div>
+      <div id="gate-reason" style="color:var(--muted);font-size:.8rem;word-break:break-word">--</div>
+    </div>
+    <div class="stat-grid" style="margin-top:4px">
+      <div class="stat"><div class="stat-label">Regime Gate</div><div id="gate-regime" class="stat-value neu">--</div></div>
+      <div class="stat"><div class="stat-label">Strategy Gate</div><div id="gate-strategy" class="stat-value neu">--</div></div>
+      <div class="stat"><div class="stat-label">ML Gate</div><div id="gate-ml" class="stat-value neu">--</div></div>
+    </div>
+  </div>
+
+  <!-- ── Exchange Panel ── -->
+  <div class="card">
+    <div class="card-title">Exchange</div>
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-label">Base URL</div><div id="exch-url" class="stat-value info" style="font-size:.72rem;word-break:break-all">--</div></div>
+      <div class="stat"><div class="stat-label">Symbol</div><div id="exch-sym" class="stat-value neu">--</div></div>
+      <div class="stat"><div class="stat-label">Leverage</div><div id="exch-lev" class="stat-value neu">--</div></div>
+      <div class="stat"><div class="stat-label">Balance (USDT)</div><div id="exch-bal" class="stat-value neu">--</div></div>
+    </div>
+    <div class="stat-grid" style="margin-top:4px">
+      <div class="stat"><div class="stat-label">Daily PnL</div><div id="risk-dpnl" class="stat-value neu">$0</div></div>
+      <div class="stat"><div class="stat-label">Trades Today</div><div id="risk-tday" class="stat-value neu">--</div></div>
+    </div>
+  </div>
+
+  <!-- ── Trade Log (wide) ── -->
+  <div class="card card-wide">
+    <div class="card-title">Recent Trades</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Direction</th>
+            <th>Strategy</th>
+            <th>Entry</th>
+            <th>SL</th>
+            <th>TP</th>
+            <th>Outcome</th>
+            <th>PnL</th>
+          </tr>
+        </thead>
+        <tbody id="trade-tbody">
+          <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px">No trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<footer id="footer">
+  TradIA &mdash; ICT/SMC Signal Bot &mdash; <span id="footer-time">--</span>
+  &nbsp;|&nbsp; <span id="footer-exch">demo-fapi.binance.com</span>
+  &nbsp;|&nbsp; Paper Mode
+</footer>
+
+<script>
+  const API = '';   // same origin — served by FastAPI
+
+  let countdown = 15;
+  let cdTimer   = null;
+
+  function fmt(n, decimals=2, prefix='') {
+    if (n == null || n === undefined) return '--';
+    const v = parseFloat(n);
+    if (isNaN(v)) return '--';
+    return prefix + v.toFixed(decimals);
+  }
+  function fmtTs(iso) {
+    if (!iso) return '--';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    } catch { return iso; }
+  }
+  function colorClass(v) {
+    if (v == null) return 'neu';
+    return parseFloat(v) >= 0 ? 'up' : 'down';
+  }
+  function setText(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val ?? '--';
+  }
+  function setClass(id, cls) {
+    const el = document.getElementById(id);
+    if (el) { el.className = el.className.replace(/\b(up|down|neu|warn|info)\b/g, ''); el.classList.add(cls); }
+  }
+
+  // ── /api/status/live ─────────────────────────────────────────────────────
+  async function fetchStatus() {
+    try {
+      const r = await fetch(API + '/api/status/live');
+      if (!r.ok) return;
+      const d = await r.json();
+
+      // Mode badges
+      const modeBadge = document.getElementById('mode-badge');
+      if (d.paper_mode) {
+        modeBadge.textContent = 'Paper'; modeBadge.className = 'badge badge-paper';
+      } else {
+        modeBadge.textContent = 'Live'; modeBadge.className = 'badge badge-live';
+      }
+
+      const connBadge = document.getElementById('conn-badge');
+      const exch = d.exchange || {};
+      if (exch.connected) {
+        connBadge.textContent = 'Connected'; connBadge.className = 'badge badge-live';
+      } else {
+        connBadge.textContent = 'Disconnected'; connBadge.className = 'badge badge-disc';
+      }
+
+      // -- Signal --
+      const sig = d.current_signal;
+      if (sig) {
+        const dir = (sig.signal || 'NO TRADE').toUpperCase();
+        const dirEl = document.getElementById('sig-direction');
+        dirEl.textContent = dir;
+        dirEl.className = 'signal-direction ' +
+          (dir === 'BUY' ? 'sig-buy' : dir === 'SELL' ? 'sig-sell' : 'sig-none');
+
+        const conf = parseFloat(sig.confidence || 0);
+        setText('sig-conf', (conf * 100).toFixed(1) + '%');
+        setText('sig-strat', sig.strategy_type || '--');
+        setText('sig-regime', sig.regime || '--');
+        setText('sig-candle', fmtTs(sig.candle_time));
+        setText('sig-entry', sig.entry ? '$' + sig.entry.toLocaleString() : '--');
+        setText('sig-sl', sig.sl ? '$' + sig.sl.toLocaleString() : '--');
+        setText('sig-tp', sig.tp ? '$' + sig.tp.toLocaleString() : '--');
+        setText('sig-rr', sig.rr || '--');
+
+        // Confidence bar
+        const bar = document.getElementById('conf-bar');
+        bar.style.width = (conf * 100) + '%';
+        bar.className = 'progress-bar ' + (conf >= 0.5 ? 'conf-high' : conf >= 0.35 ? 'conf-med' : 'conf-low');
+
+        // Reject reason
+        const rejEl = document.getElementById('sig-reject');
+        if (sig.reject_reason && !sig.executable) {
+          rejEl.style.display = 'block';
+          rejEl.textContent = 'Rejected: ' + sig.reject_reason;
+        } else {
+          rejEl.style.display = 'none';
+        }
+
+        // HTF bias
+        const htfRow = document.getElementById('htf-row');
+        htfRow.innerHTML = '';
+        const bias = sig.htf_bias || {};
+        const chips = [
+          { label: '4H', val: bias.h4 },
+          { label: 'D1', val: bias.d1 },
+        ];
+        chips.forEach(c => {
+          const chip = document.createElement('span');
+          chip.className = 'gate-chip ' + (c.val > 0 ? 'gate-pass' : c.val < 0 ? 'gate-kill' : '');
+          chip.textContent = c.label + ': ' + (c.val > 0 ? '+' : '') + (c.val ?? 0);
+          htfRow.appendChild(chip);
+        });
+        if (bias.full_confluence) {
+          const fc = document.createElement('span');
+          fc.className = 'gate-chip gate-pass';
+          fc.textContent = 'Full Confluence';
+          htfRow.appendChild(fc);
+        }
+      }
+
+      // -- Open position --
+      const pos = d.open_position;
+      document.getElementById('pos-empty').style.display = pos ? 'none' : 'block';
+      document.getElementById('pos-data').style.display  = pos ? 'block' : 'none';
+      if (pos) {
+        const side = (pos.side || '').toUpperCase();
+        const sideEl = document.getElementById('pos-side');
+        sideEl.textContent = side;
+        sideEl.className = 'stat-value ' + (side === 'LONG' ? 'up' : 'down');
+        setText('pos-size', fmt(pos.size, 4));
+        setText('pos-entry', '$' + fmt(pos.entry_price, 2));
+        setText('pos-mark', '$' + fmt(pos.mark_price, 2));
+        const pnl = parseFloat(pos.unrealised_pnl || 0);
+        const pnlEl = document.getElementById('pos-pnl');
+        pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+        pnlEl.className = 'stat-value ' + colorClass(pnl);
+        setText('pos-liq', '$' + fmt(pos.liquidation_price, 2));
+      }
+
+      // -- Session perf --
+      const sess = d.session || {};
+      const pnl = parseFloat(sess.total_pnl || 0);
+      setText('perf-trades', sess.total_trades || 0);
+      setText('perf-wr', fmt(sess.win_rate_pct, 1) + '%');
+      const pnlEl = document.getElementById('perf-pnl');
+      pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+      pnlEl.className = 'stat-value ' + colorClass(pnl);
+      setText('perf-fees', '$' + fmt(sess.total_fees_paid, 2));
+      setText('perf-dd', fmt(sess.max_drawdown_pct, 1) + '%');
+      setText('perf-cap', '$' + fmt(sess.running_capital, 2));
+      setText('perf-wins', (sess.wins || 0) + 'W');
+      setText('perf-losses', (sess.losses || 0) + 'L');
+
+      const total = (sess.wins || 0) + (sess.losses || 0);
+      const wrPct = total > 0 ? ((sess.wins || 0) / total * 100) : 0;
+      document.getElementById('wr-bar').style.width = wrPct + '%';
+
+      // -- Exchange --
+      setText('exch-url', exch.base_url || '--');
+      setText('exch-sym', exch.symbol || '--');
+      setText('exch-lev', exch.leverage ? exch.leverage + 'x' : '--');
+      setText('exch-bal', exch.balance != null ? '$' + parseFloat(exch.balance).toFixed(2) : '--');
+
+      // -- Risk --
+      const risk = d.risk || {};
+      const dpnl = parseFloat(risk.daily_pnl || 0);
+      const dpnlEl = document.getElementById('risk-dpnl');
+      dpnlEl.textContent = (dpnl >= 0 ? '+$' : '-$') + Math.abs(dpnl).toFixed(2);
+      dpnlEl.className = 'stat-value ' + colorClass(dpnl);
+      setText('risk-tday', (risk.trades_today ?? '--') + ' / ' + (risk.max_trades_per_day ?? '--'));
+
+      // Footer
+      setText('footer-time', new Date(d.timestamp || Date.now()).toLocaleString());
+      setText('footer-exch', exch.base_url || 'demo-fapi.binance.com');
+
+    } catch(e) {
+      console.warn('Status fetch error:', e);
+    }
+  }
+
+  // ── /api/gate-status ──────────────────────────────────────────────────────
+  async function fetchGateStatus() {
+    try {
+      const r = await fetch(API + '/api/gate-status');
+      if (!r.ok) return;
+      const g = await r.json();
+
+      const row = document.getElementById('gate-row');
+      row.innerHTML = '';
+
+      const gates = [
+        { label: 'Regime: ' + (g.gate_regime || '--'), pass: g.gate_regime !== 'NO TRADE' },
+        { label: 'Strategy: ' + (g.gate_strategy || '--'), pass: g.gate_strategy === 'ok' },
+        { label: 'ML: ' + (g.gate_ml || '--'), pass: g.gate_ml === 'ok' },
+      ];
+      gates.forEach(gate => {
+        const chip = document.createElement('span');
+        chip.className = 'gate-chip ' + (gate.pass ? 'gate-pass' : 'gate-kill');
+        chip.textContent = gate.label;
+        row.appendChild(chip);
+      });
+
+      // Overall pass/kill chip
+      const overall = document.createElement('span');
+      overall.className = 'gate-chip ' + (g.killed ? 'gate-kill' : 'gate-pass');
+      overall.style.fontWeight = '700';
+      overall.textContent = g.killed ? 'KILLED' : 'PASSED';
+      row.appendChild(overall);
+
+      setText('gate-reason', g.reason || (g.killed ? 'Gate blocked signal' : 'Signal passed all gates'));
+      setText('gate-regime', g.gate_regime || '--');
+
+      const stratEl = document.getElementById('gate-strategy');
+      stratEl.textContent = g.gate_strategy || '--';
+      stratEl.className = 'stat-value ' + (g.gate_strategy === 'ok' ? 'up' : 'down');
+
+      setText('gate-ml', g.gate_ml || '--');
+
+    } catch(e) {
+      console.warn('Gate status fetch error:', e);
+    }
+  }
+
+  // ── /api/trade-log (from trade_routes) ───────────────────────────────────
+  async function fetchTrades() {
+    try {
+      const r = await fetch(API + '/api/trades');
+      if (!r.ok) return;
+      const data = await r.json();
+      const trades = Array.isArray(data) ? data : (data.trades || []);
+
+      const tbody = document.getElementById('trade-tbody');
+      if (!trades.length) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px">No trades yet</td></tr>';
+        return;
+      }
+
+      const rows = trades.slice(-20).reverse().map(t => {
+        const outcome = (t.outcome || '').toUpperCase();
+        const pnl     = parseFloat(t.pnl || 0);
+        const dir     = (t.direction || '').toUpperCase();
+        return `<tr>
+          <td>${fmtTs(t.opened_at || t.timestamp)}</td>
+          <td style="color:${dir==='BUY'?'var(--green)':'var(--red)'}">${dir}</td>
+          <td>${t.strategy_type || '--'}</td>
+          <td>$${fmt(t.entry_price,2)}</td>
+          <td>$${fmt(t.sl_price,2)}</td>
+          <td>$${fmt(t.tp_price,2)}</td>
+          <td style="color:${outcome==='TP'?'var(--green)':'var(--red)'}">${outcome || '--'}</td>
+          <td style="color:${pnl>=0?'var(--green)':'var(--red)'}">
+            ${pnl>=0?'+':'-'}$${Math.abs(pnl).toFixed(2)}
+          </td>
+        </tr>`;
+      });
+      tbody.innerHTML = rows.join('');
+    } catch(e) {
+      // Trade log endpoint may not exist — silently skip
+    }
+  }
+
+  // ── Refresh loop ─────────────────────────────────────────────────────────
+  function refresh() {
+    fetchStatus();
+    fetchGateStatus();
+    fetchTrades();
+    resetCountdown();
+  }
+
+  function resetCountdown() {
+    countdown = 15;
+    clearInterval(cdTimer);
+    cdTimer = setInterval(() => {
+      countdown--;
+      setText('countdown', countdown);
+      if (countdown <= 0) refresh();
+    }, 1000);
+  }
+
+  // Initial load
+  refresh();
+</script>
+</body>
+</html>

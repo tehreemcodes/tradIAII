@@ -54,14 +54,15 @@ FEATURE_COLS: list[str] = [
     "upper_wick_pct",         # upper wick / close
     "lower_wick_pct",         # lower wick / close
     "is_bullish_candle",      # close > open (1/0)
-    "body_to_range_ratio",    # body / range (candle quality)
+    "body_to_range_ratio",
+    "is_bullish_candle",
 
     # Volume
     "volume_ratio",           # volume / 20-period avg volume
     "volume_zscore",          # (volume - mean) / std
 
     # Price context
-    "close",
+    "close_to_ema200_ratio",  # replacing raw close to prevent data leakage
     "atr_14",                 # 14-period ATR
     "atr_percentile",         # ATR percentile rank (volatility regime)
     "range_position_20",      # where price sits in 20-bar range [0, 1]
@@ -110,7 +111,7 @@ FEATURE_COLS: list[str] = [
     "rsi_14",
     "rsi_regime",
     "momentum_4h",
-    "funding_rate_proxy",
+    "volume_zscore_proxy",
     "bb_position",
 
     # NEW: Dual-Strategy Features
@@ -143,8 +144,11 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["candle_range_pct"]  = rng / c
     df["upper_wick_pct"]    = upper_wick / c
     df["lower_wick_pct"]    = lower_wick / c
-    df["is_bullish_candle"] = (df["close"] > df["open"]).astype(int)
     df["body_to_range_ratio"]= body / rng.replace(0, np.nan)
+    df["is_bullish_candle"] = (df["close"] > df["open"]).astype(int)
+
+    # ── Price Context ────────────────────────────────────────
+    df["close_to_ema200_ratio"] = (df["close"] / df["close"].ewm(span=200).mean()).fillna(1.0)
 
     # ── Volume ───────────────────────────────────────────────
     vol_ma = df["volume"].rolling(20, min_periods=1).mean()
@@ -283,8 +287,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # 4H momentum proxy (using available close data, 3-period return)
     df["momentum_4h"] = df["close"].pct_change(3).fillna(0)
 
-    # Funding rate proxy (volume zscore is a reasonable stand-in on 15m/1h TF)
-    df["funding_rate_proxy"] = df.get("volume_zscore", 0.0)
+    # Volume zscore proxy (historically named funding_rate_proxy)
+    df["volume_zscore_proxy"] = df["volume_zscore"]
 
     # Bollinger Band position
     bb_mid = df["close"].rolling(20).mean()
@@ -310,38 +314,24 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ema_slope_8"] = ema_slope.fillna(0.0)
 
     # Structure score: count HH/HL vs LH/LL in rolling window
-    def _rolling_structure(df_in, window=20):
-        scores = np.zeros(len(df_in))
-        sh_flags = df_in.get("swing_high", pd.Series(False, index=df_in.index)).values
-        sl_flags = df_in.get("swing_low", pd.Series(False, index=df_in.index)).values
-        sh_prices = df_in.get("swing_high_price", pd.Series(np.nan, index=df_in.index)).values
-        sl_prices = df_in.get("swing_low_price", pd.Series(np.nan, index=df_in.index)).values
-
-        for i in range(window, len(df_in)):
-            # Count structure in lookback window
-            start = max(0, i - window)
-            hh = hl = lh = ll = 0
-            prev_sh = prev_sl = np.nan
-            for k in range(start, i + 1):
-                if sh_flags[k] and not np.isnan(sh_prices[k]):
-                    if not np.isnan(prev_sh):
-                        if sh_prices[k] > prev_sh: hh += 1
-                        elif sh_prices[k] < prev_sh: lh += 1
-                    prev_sh = sh_prices[k]
-                if sl_flags[k] and not np.isnan(sl_prices[k]):
-                    if not np.isnan(prev_sl):
-                        if sl_prices[k] > prev_sl: hl += 1
-                        elif sl_prices[k] < prev_sl: ll += 1
-                    prev_sl = sl_prices[k]
-            total = hh + hl + lh + ll
-            scores[i] = (hh + hl - lh - ll) / total if total > 0 else 0.0
-        return scores
-
-    df["structure_score"] = _rolling_structure(df)
-
-    # Pullback depth: how far price has retraced from last swing extreme
     last_sh = df.get("swing_high_price", pd.Series(np.nan, index=df.index)).ffill()
     last_sl_price = df.get("swing_low_price", pd.Series(np.nan, index=df.index)).ffill()
+
+    sh_diff = np.sign(last_sh.diff())
+    sl_diff = np.sign(last_sl_price.diff())
+
+    bullish = (sh_diff > 0).astype(int) + (sl_diff > 0).astype(int)
+    bearish = (sh_diff < 0).astype(int) + (sl_diff < 0).astype(int)
+
+    bull_sum = bullish.rolling(20, min_periods=1).sum()
+    bear_sum = bearish.rolling(20, min_periods=1).sum()
+    total = bull_sum + bear_sum
+
+    # Smoothed to reduce noise and prevent overfitting
+    raw_score = ((bull_sum - bear_sum) / total.replace(0, np.nan)).fillna(0.0)
+    df["structure_score"] = raw_score.ewm(span=5, min_periods=1).mean()
+
+    # Pullback depth: how far price has retraced from last swing extreme
     swing_range = (last_sh - last_sl_price).replace(0, np.nan)
     pullback = (last_sh - df["close"]) / swing_range
     df["pullback_depth"] = pullback.fillna(0.5).clip(0, 1)

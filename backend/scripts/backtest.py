@@ -88,10 +88,21 @@ def _simulate(
     compound:  bool  = False,
     apply_fees:bool  = True,
     label:     str   = "",
+    require_htf_confluence: bool = False,
 ) -> RiskManager:
     """
     Walk through signals and simulate trades with risk management.
     Slippage is applied to entry price before position sizing.
+
+    Gate counters printed at end:
+        killed_by_drawdown_halt  — max-drawdown stop or system halted
+        killed_by_daily_loss     — daily loss limit reached
+        killed_by_cooldown       — cooldown between trades
+        killed_by_capital        — capital depleted
+        killed_by_htf_confluence — h4_bias/d1_bias not aligned (require_htf_confluence=True)
+        killed_by_ml_confidence  — ML probability below MIN_CONFIDENCE
+        killed_by_risk_manager   — calculate_position() returned None
+        actually_traded          — trades that reached record_outcome()
     """
     rm = RiskManager(
         initial_capital  = INITIAL_CAPITAL,
@@ -100,32 +111,66 @@ def _simulate(
         cooldown_minutes = COOLDOWN_MINUTES,
         compound         = compound,
         apply_fees       = apply_fees,
+        backtest_mode    = True,   # disables live-only filters: EV gate, daily trade governor
     )
-    signals  = df[df["signal"].isin([0, 2])].copy()
-    ml_filtered = gate_filtered = traded = halted = 0
+
+    signals = df[df["signal"].isin([0, 2])].copy()
+    total_signals            = len(signals)
+
+    # ── Per-gate kill counters ────────────────────────────────────────────────
+    killed_by_drawdown_halt  = 0   # max-drawdown stop or system-halted flag
+    killed_by_daily_loss     = 0   # daily loss limit
+    killed_by_cooldown       = 0   # inter-trade cooldown
+    killed_by_capital        = 0   # capital depleted
+    killed_by_htf_confluence = 0   # HTF bias not aligned (optional gate)
+    killed_by_ml_confidence  = 0   # ML probability too low
+    killed_by_risk_manager   = 0   # calculate_position() returned None
+    actually_traded          = 0
 
     for ts, row in signals.iterrows():
         allowed, reason = rm.can_trade(ts)
         if not allowed:
-            if reason in ("max drawdown", "system halted"):
-                halted += 1
+            r = reason.lower()
+            if "halted" in r or "max drawdown" in r:
+                killed_by_drawdown_halt += 1
+            elif "daily loss" in r:
+                killed_by_daily_loss += 1
+            elif "cooldown" in r:
+                killed_by_cooldown += 1
+            else:
+                killed_by_capital += 1
             continue
 
         direction = "BUY" if row["signal"] == 2 else "SELL"
 
-        # ML confidence filter
-        if model is not None:
-            avail = [f for f in features if f in df.columns]
-            x     = pd.DataFrame(
-                scaler.transform(df.loc[[ts], avail].fillna(0)),
-                columns=avail
-            )
-            prob = float(model.predict_proba(x)[0][1])
-            if prob < MIN_CONFIDENCE:
-                ml_filtered += 1
+        # ── Optional HTF confluence gate ──────────────────────────────────────
+        # Disabled by default (require_htf_confluence=False).
+        # Enable to require h4_bias AND d1_bias to agree with trade direction.
+        if require_htf_confluence:
+            h4_bias = float(row.get("h4_bias", 0))
+            d1_bias = float(row.get("d1_bias", 0))
+            if direction == "BUY"  and (h4_bias <= 0 or d1_bias < 0):
+                killed_by_htf_confluence += 1
+                continue
+            if direction == "SELL" and (h4_bias >= 0 or d1_bias > 0):
+                killed_by_htf_confluence += 1
                 continue
 
-        # Apply slippage to entry price
+        # ── ML confidence gate ────────────────────────────────────────────────
+        if model is not None:
+            avail    = [f for f in features if f in df.columns]
+            row_data = (
+                df.loc[[ts], avail]
+                  .apply(pd.to_numeric, errors="coerce")
+                  .fillna(0)
+            )
+            x_scaled = scaler.transform(row_data)   # numpy array — avoids XGBoost DataFrame dtype bug
+            prob = float(model.predict_proba(x_scaled)[0][1])
+            if prob < MIN_CONFIDENCE:
+                killed_by_ml_confidence += 1
+                continue
+
+        # ── Position sizing ───────────────────────────────────────────────────
         raw_entry     = float(row["close"])
         slipped_entry = _apply_slippage(raw_entry, direction)
 
@@ -136,9 +181,10 @@ def _simulate(
             ts,
         )
         if trade is None:
+            killed_by_risk_manager += 1
             continue
 
-        # Simulate outcome using slipped entry price
+        # ── Outcome simulation ────────────────────────────────────────────────
         idx    = df.index.get_loc(ts)
         future = df.iloc[idx + 1 : idx + 31]
         outcome = None
@@ -152,13 +198,32 @@ def _simulate(
                 if frow["low"]  <= trade.tp: outcome = "TP"; break
 
         rm.record_outcome(trade, outcome or "SL")
-        traded += 1
+        actually_traded += 1
 
-    if label:
-        logger.info(
-            f"[{label}] Gate Filtered: {gate_filtered} | ML Filtered: {ml_filtered} | Traded: {traded} | "
-            f"Halted: {halted} | Slippage/side: {SLIPPAGE_PCT*100:.3f}%"
-        )
+    # ── Gate breakdown report ─────────────────────────────────────────────────
+    sep = "-" * 58
+    tag = label or "Standard"
+    gate_lines = [
+        "",
+        sep,
+        f"  GATE BREAKDOWN  [{tag}]",
+        sep,
+        f"  Total signals (signal in [0,2])     : {total_signals:>6,}",
+        f"  Killed - drawdown halt / sys-halted : {killed_by_drawdown_halt:>6,}",
+        f"  Killed - daily loss limit           : {killed_by_daily_loss:>6,}",
+        f"  Killed - cooldown                   : {killed_by_cooldown:>6,}",
+        f"  Killed - capital depleted           : {killed_by_capital:>6,}",
+        f"  Killed - HTF confluence (optional)  : {killed_by_htf_confluence:>6,}",
+        f"  Killed - ML confidence              : {killed_by_ml_confidence:>6,}",
+        f"  Killed - risk mgr (calc_pos=None)   : {killed_by_risk_manager:>6,}",
+        f"  Actually traded                     : {actually_traded:>6,}",
+        f"  Slippage/side                       : {SLIPPAGE_PCT*100:.3f}%",
+        sep,
+    ]
+    report = "\n".join(gate_lines)
+    print(report)
+    logger.info(report)
+
     return rm
 
 
@@ -227,8 +292,9 @@ def _run_monte_carlo(pnls: np.ndarray) -> dict:
 
 
 def run_backtest(
-    use_model:    bool = True,
-    walk_forward: bool = False,
+    use_model:              bool = True,
+    walk_forward:           bool = False,
+    require_htf_confluence: bool = False,
 ) -> dict:
 
     # ── Load & process data ───────────────────────────────────────────────────
@@ -265,7 +331,8 @@ def run_backtest(
     logger.info("Running standard backtest (fixed risk, fees + slippage)...")
     rm_main = _simulate(
         df, model, scaler, features,
-        compound=False, apply_fees=True, label="Standard"
+        compound=False, apply_fees=True, label="Standard",
+        require_htf_confluence=require_htf_confluence,
     )
     results["standard"] = rm_main
 
@@ -371,12 +438,12 @@ def _print_report(
         print(f"    Interpretation  : In 95% of trade sequences, max DD")
         print(f"                      stays below {monte_carlo['p95_max_dd_pct']:.1f}%")
         print()
-    
-    # After printing the Final Capital Distribution block:
-    if monte_carlo['p5_final'] == monte_carlo['p95_final']:
-        print("  (Note: identical final capitals are expected with")
-        print("   fixed flat risk — path order doesn't change the sum.")
-        print("   Drawdown distribution below is the meaningful metric.)")
+        # Note: with flat risk, all paths have identical final PnL sum.
+        # The drawdown distribution is the meaningful Monte Carlo output.
+        if monte_carlo['p5_final'] == monte_carlo['p95_final']:
+            print("  (Note: identical final capitals are expected with")
+            print("   fixed flat risk — path order doesn't change the sum.")
+            print("   Drawdown distribution below is the meaningful metric.)")
 
     if walk_forward:
         print("  OUT-OF-SAMPLE PERIOD VALIDATION")
@@ -530,11 +597,14 @@ def _save_charts(rm: RiskManager, monte_carlo: dict | None = None) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--no-model",     action="store_true")
-    parser.add_argument("--walk-forward", action="store_true",
+    parser.add_argument("--no-model",             action="store_true")
+    parser.add_argument("--walk-forward",         action="store_true",
                         help="Include out-of-sample period validation")
+    parser.add_argument("--require-htf-confluence", action="store_true",
+                        help="Gate trades on h4_bias AND d1_bias alignment")
     args = parser.parse_args()
     run_backtest(
-        use_model    = not args.no_model,
-        walk_forward = args.walk_forward,
+        use_model              = not args.no_model,
+        walk_forward           = args.walk_forward,
+        require_htf_confluence = args.require_htf_confluence,
     )

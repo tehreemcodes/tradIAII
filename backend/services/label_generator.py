@@ -2,7 +2,10 @@
 
 import pandas as pd
 import numpy as np
-from backend.config.settings import LABEL_FORWARD, LABEL_WIN, LABEL_LOSS
+import logging
+from backend.config.settings import LABEL_FORWARD, LABEL_WIN, LABEL_LOSS, REWARD_RATIO
+
+logger = logging.getLogger(__name__)
 
 
 def label_trades(df: pd.DataFrame, timeframe: str = "15m") -> pd.DataFrame:
@@ -12,6 +15,8 @@ def label_trades(df: pd.DataFrame, timeframe: str = "15m") -> pd.DataFrame:
     - NO quality influence (critical fix)
     - Forward window simulation
     """
+    
+    logger.info(f"Labeling trades using REWARD_RATIO={REWARD_RATIO}")
 
     df = df.copy()
     forward = LABEL_FORWARD.get(timeframe, 30)
@@ -41,8 +46,8 @@ def label_trades(df: pd.DataFrame, timeframe: str = "15m") -> pd.DataFrame:
             labels.append(np.nan)
             continue
 
-        # Define TP based on strategy-neutral RR=1 (ML learns probability, not RR)
-        tp = entry + risk if direction == "BUY" else entry - risk
+        # Define TP based on actual production RR
+        tp = entry + risk * REWARD_RATIO if direction == "BUY" else entry - risk * REWARD_RATIO
 
         future = df.iloc[i + 1 : i + 1 + forward]
 

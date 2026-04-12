@@ -19,6 +19,7 @@ env/
 .env
 .env.local
 .env.production
+!.env.example
 *.key
 *.secret
 
@@ -30,9 +31,9 @@ backend/logs/
 # Comment these out if you WANT to include data in the repo
 # backend/data/*.csv
 
-# ── Trained model artifacts (binary, large) ──────────────────
-# Comment these out if you WANT to include models in the repo
-# backend/models/*.pkl
+# ── Trained model artifacts ──────────────────────────────────
+# .pkl files are intentionally committed so VPS does not need to retrain.
+# backend/models/*.pkl  <-- kept tracked
 
 # ── Database / cache ──────────────────────────────────────────
 *.db

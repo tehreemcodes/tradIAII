@@ -34,28 +34,35 @@ def build_xgb_params(y):
     spw = neg / pos if pos > 0 else 1
     params = dict(XGBOOST_PARAMS)
     params["scale_pos_weight"] = spw
+    logger.info(f"Class counts — Loss(0): {neg}, Win(1): {pos}")
+    logger.info(f"scale_pos_weight = {spw:.2f}  (target: >8 means severe imbalance)")
     return params
 
 
 def evaluate(model, X_test, y_test):
-    y_pred = model.predict(X_test)
     y_prob = model.predict_proba(X_test)[:, 1]
 
-    acc = accuracy_score(y_test, y_pred)
-    kappa = cohen_kappa_score(y_test, y_pred)
+    print("\n" + "=" * 60)
+    print("MODEL PERFORMANCE")
+    print("=" * 60)
+
+    for threshold in [0.5, 0.4, 0.3]:
+        y_pred = (y_prob >= threshold).astype(int)
+        acc   = accuracy_score(y_test, y_pred)
+        kappa = cohen_kappa_score(y_test, y_pred)
+        print(f"\n--- Threshold = {threshold} ---")
+        print(classification_report(y_test, y_pred))
+        print(f"Accuracy: {acc:.4f}  |  Kappa: {kappa:.4f}")
 
     try:
         auc = roc_auc_score(y_test, y_prob)
     except Exception:
         auc = float("nan")
 
-    print("\n" + "=" * 60)
-    print("MODEL PERFORMANCE")
+    print(f"\nAUC (threshold-independent): {auc:.4f}")
     print("=" * 60)
-    print(classification_report(y_test, y_pred))
-    print(f"Accuracy: {acc:.4f}")
-    print(f"Kappa: {kappa:.4f}")
-    print(f"AUC: {auc:.4f}")
+    print("ACTION: Pick the threshold where class-1 recall >= 0.50")
+    print("        Then set MIN_CONFIDENCE to that value in settings.py")
     print("=" * 60)
 
 
@@ -106,8 +113,19 @@ def main(timeframe):
     X = df[features].fillna(0)
     y = df["ml_label"].astype(int)
 
+    positive_rate = y.mean()
     logger.info(f"Dataset size: {len(X):,}")
     logger.info(f"Class distribution:\n{y.value_counts()}")
+    logger.info(f"Positive rate (wins): {positive_rate:.2%}")
+
+    if positive_rate < 0.05:
+        logger.warning("CRITICAL: Win rate below 5% — labels are almost all losses.")
+        logger.warning("Cause: LABEL_FORWARD window too short for RR=3, or data issue.")
+        logger.warning("Fix: increase LABEL_FORWARD in settings.py, or reduce REWARD_RATIO.")
+    elif positive_rate < 0.10:
+        logger.warning("WARNING: Win rate below 10% — model will struggle to learn wins.")
+        logger.warning("Consider increasing LABEL_FORWARD or reducing MIN_CONFIDENCE threshold.")
+
 
     # Train-test split
     split = int(len(X) * TRAIN_SPLIT)
@@ -134,6 +152,14 @@ def main(timeframe):
         eval_set=[(X_test, y_test)],
         verbose=100
     )
+
+    importances = pd.Series(model.feature_importances_, index=features).sort_values(ascending=False)
+    logger.info("Top 20 features by importance:")
+    logger.info("\n" + importances.head(20).to_string())
+    
+    importance_path = MODEL_DIR / f"feature_importance_{timeframe}.txt"
+    importances.to_csv(importance_path)
+    logger.info(f"Feature importances saved to {importance_path}")
 
     # Evaluate
     evaluate(model, X_test, y_test)

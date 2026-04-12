@@ -48,6 +48,11 @@ class RegimeResult:
 
 class MarketRegimeDetector:
 
+    def __init__(self):
+        self._confirmed_regime = None
+        self._candidate_regime = None
+        self._regime_count = 0
+
     def classify(self, df: pd.DataFrame, row: Optional[pd.Series] = None) -> RegimeResult:
         if row is None:
             row = df.iloc[-1]
@@ -62,7 +67,7 @@ class MarketRegimeDetector:
 
         # LOW VOL
         if atr_pct < REGIME_VOL_LOW and adx < REGIME_ADX_RANGING:
-            return RegimeResult(
+            result = RegimeResult(
                 Regime.LOW_VOLATILITY,
                 0.9,
                 adx, atr_pct, vol_pct,
@@ -71,8 +76,8 @@ class MarketRegimeDetector:
             )
 
         # HIGH VOL
-        if atr_pct > REGIME_VOL_HIGH and adx < REGIME_ADX_TRENDING:
-            return RegimeResult(
+        elif atr_pct > REGIME_VOL_HIGH and adx < REGIME_ADX_TRENDING:
+            result = RegimeResult(
                 Regime.HIGH_VOLATILITY,
                 0.8,
                 adx, atr_pct, vol_pct,
@@ -81,13 +86,13 @@ class MarketRegimeDetector:
             )
 
         # TRENDING
-        if (
+        elif (
             adx > REGIME_ADX_TRENDING and
-            abs(trend_str) > 0.4 and
-            abs(structure_score) > 0.2 and
+            abs(trend_str) > 0.3 and
+            abs(structure_score) > 0.1 and
             abs(ema_slope) > REGIME_EMA_SLOPE_MIN
         ):
-            return RegimeResult(
+            result = RegimeResult(
                 Regime.TRENDING,
                 0.8,
                 adx, atr_pct, vol_pct,
@@ -95,13 +100,33 @@ class MarketRegimeDetector:
                 "Trending market"
             )
 
-        return RegimeResult(
-            Regime.RANGING,
-            0.6,
-            adx, atr_pct, vol_pct,
-            trend_str, structure_score,
-            "Ranging market"
-        )
+        else:
+            result = RegimeResult(
+                Regime.RANGING,
+                0.6,
+                adx, atr_pct, vol_pct,
+                trend_str, structure_score,
+                "Ranging market"
+            )
+
+        # Apply Hysteresis
+        current_regime = result.regime
+
+        if self._confirmed_regime is None:
+            self._confirmed_regime = current_regime
+            self._candidate_regime = current_regime
+            self._regime_count = 1
+        else:
+            if current_regime == self._candidate_regime:
+                self._regime_count += 1
+                if self._regime_count >= 3:
+                    self._confirmed_regime = current_regime
+            else:
+                self._candidate_regime = current_regime
+                self._regime_count = 1
+
+        result.regime = self._confirmed_regime
+        return result
 
     def _compute_structure_score(self, df: pd.DataFrame) -> float:
         recent = df.tail(REGIME_LOOKBACK)
