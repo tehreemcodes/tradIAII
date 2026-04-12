@@ -4,10 +4,11 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api, Trade, TradesResponse, fmtPrice, signalColor } from '@/lib/api'
 
-// Calculation for ROI based on 20x leverage
+// ROI based on actual leverage (3x as configured in settings)
+const LEVERAGE = 3
 const calcROI = (trade: Trade) => {
   if (trade.pnl == null || trade.entry_price == null || trade.size == null) return 0
-  const marginUsed = (trade.entry_price * trade.size) / 20
+  const marginUsed = (trade.entry_price * trade.size) / LEVERAGE
   return (trade.pnl / marginUsed) * 100
 }
 
@@ -82,7 +83,7 @@ export default function HistoryPage() {
               <thead>
                 <tr className="bg-white/[0.03]">
                   {[
-                    'Time (UTC)', 'Symbol', 'Side', 'Size', 'Entry', 'Exit', 'PnL', 'ROI (20x)', 'Outcome'
+                    'Time (UTC)', 'Symbol', 'Side', 'Size', 'Entry', 'Exit', 'PnL', 'ROI (3x)', 'Outcome'
                   ].map(h => (
                     <th key={h} className="px-6 py-4 text-[10px] font-black uppercase tracking-widest text-white/30 border-b border-white/5">
                       {h}

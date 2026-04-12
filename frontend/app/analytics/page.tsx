@@ -56,10 +56,10 @@ export default function AnalyticsPage() {
   }) || []
 
   const stats = [
-    { label: 'Net P&L', value: `${summary?.net_pnl >= 0 ? '+' : ''}${summary?.net_pnl.toFixed(2)}`, sub: 'USDT', icon: DollarSign, color: (summary?.net_pnl || 0) >= 0 ? 'text-teal-400' : 'text-rose-500' },
-    { label: 'Win Rate', value: `${summary?.win_rate_pct.toFixed(1)}`, sub: '%', icon: Percent, color: 'text-blue-400' },
-    { label: 'Total Fees', value: `-${summary?.total_fees.toFixed(2)}`, sub: 'USDT', icon: Activity, color: 'text-amber-400' },
-    { label: 'Total Trades', value: `${summary?.total_trades}`, sub: 'Executed', icon: TrendingUp, color: 'text-indigo-400' },
+    { label: 'Net P&L', value: `${(summary?.net_pnl ?? 0) >= 0 ? '+' : ''}${(summary?.net_pnl ?? 0).toFixed(2)}`, sub: 'USDT', icon: DollarSign, color: (summary?.net_pnl || 0) >= 0 ? 'text-teal-400' : 'text-rose-500' },
+    { label: 'Win Rate', value: `${(summary?.win_rate_pct ?? 0).toFixed(1)}`, sub: '%', icon: Percent, color: 'text-blue-400' },
+    { label: 'Total Fees', value: `-${(summary?.total_fees ?? 0).toFixed(2)}`, sub: 'USDT', icon: Activity, color: 'text-amber-400' },
+    { label: 'Total Trades', value: `${summary?.total_trades ?? 0}`, sub: 'Executed', icon: TrendingUp, color: 'text-indigo-400' },
   ]
 
   return (
@@ -146,7 +146,7 @@ export default function AnalyticsPage() {
                   <Percent className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
                   <div>
                     <h4 className="text-xs font-bold mb-1">Fee Attrition</h4>
-                    <p className="text-[11px] text-white/30 leading-relaxed">Fees represent approx {((summary?.total_fees || 0) / (summary?.net_pnl || 1) * 10).toFixed(1)}% of net profit. Monitor taker costs.</p>
+                    <p className="text-[11px] text-white/30 leading-relaxed">Fees represent approx {((summary?.total_fees || 0) / Math.abs(summary?.net_pnl || 1) * 100).toFixed(1)}% of net profit. Monitor taker costs.</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-4">
